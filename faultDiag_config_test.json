@@ -1,0 +1,32 @@
+{
+  "mode": "test",
+  "data": {
+    "mat_file": "",
+    "data_var": "XTrain",
+    "label_var": "YTrain",
+    "train_split": 0.8
+  },
+  "training": {
+    "epochs": 100,
+    "batch_size": 10,
+    "learning_rate": 0.001,
+    "validation_frequency": 10,
+    "optimizer": "adam",
+    "use_gpu": true
+  },
+  "model": {
+    "cnn": {
+      "filter_size": 2,
+      "num_filters": 32
+    },
+    "tcn": {
+      "num_blocks": 4,
+      "num_filters": 64,
+      "filter_size": 3,
+      "dropout": 0.005
+    }
+  },
+  "output": {
+    "model_save_path": "test_model.pt"
+  }
+}

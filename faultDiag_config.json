@@ -1,0 +1,40 @@
+{
+  "_comment": "1D CNN Model Configuration - matches m1DCNN.m",
+  "mode": "cnn",
+  "data": {
+    "mat_file": "Copy_of_select-model fault data.mat",
+    "data_var": "XTrain2",
+    "label_var": "YTrain2",
+	"val_data_var": "XText2",
+    "val_label_var": "YText2",
+    "train_split": 0.8,
+    "_comment_data": "Training: XTrain2 (cell array, 8 features), YTrain2 (4 classes, 1-indexed in MAT)",
+    "_comment_validation": "For validation: use XText2 and YText2 variables"
+  },
+  "training": {
+    "epochs": 400,
+    "batch_size": 26,
+    "learning_rate": 0.001,
+    "validation_frequency": 10,
+    "optimizer": "adam",
+    "use_gpu": true,
+    "_comment_training": "Matches m1DCNN.m: batch_size=26, epochs=200, left padding"
+  },
+  "model": {
+    "cnn": {
+      "filter_size": 2,
+      "num_filters": 32,
+      "_comment_cnn": "8 features, 4 classes, 2 conv layers with same padding"
+    },
+    "tcn": {
+      "num_blocks": 4,
+      "num_filters": 64,
+      "filter_size": 3,
+      "dropout": 0.005,
+      "_comment_tcn": "Not used in CNN mode"
+    }
+  },
+  "output": {
+    "model_save_path": "cnn_best_model.pt"
+  }
+}

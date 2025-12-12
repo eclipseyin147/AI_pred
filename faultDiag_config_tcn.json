@@ -1,0 +1,39 @@
+{
+  "_comment": "TCN Model Configuration - matches myselfTCN.m",
+  "mode": "tcn",
+  "data": {
+    "mat_file": "ALL_Traindata1.mat",
+    "data_var": "AXTrain3",
+    "label_var": "AYTrain",
+	"val_data_var": "XText",
+    "val_label_var": "YText",
+    "train_split": 0.8,
+    "_comment_data": "Training: AXTrain3 (cell array), AYTrain (5 classes, 1-indexed in MAT)"
+  },
+  "training": {
+    "epochs": 100,
+    "batch_size": 10,
+    "learning_rate": 0.001,
+    "validation_frequency": 10,
+    "optimizer": "adam",
+    "use_gpu": true,
+    "_comment_training": "Matches myselfTCN.m: batch_size=1, epochs=100"
+  },
+  "model": {
+    "cnn": {
+      "filter_size": 2,
+      "num_filters": 32,
+      "_comment_cnn": "Not used in TCN mode"
+    },
+    "tcn": {
+      "num_blocks": 4,
+      "num_filters": 64,
+      "filter_size": 3,
+      "dropout": 0.005,
+      "_comment_tcn": "Dilation: [1,2,4,8], rescale-symmetric normalization"
+    }
+  },
+  "output": {
+    "model_save_path": "tcn_best_model.pt"
+  }
+}

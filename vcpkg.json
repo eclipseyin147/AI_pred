@@ -1,0 +1,15 @@
+{
+  "name": "tju-torch",
+  "version-string": "1.0.0",
+  "dependencies": [
+    "cudnn",
+    {
+      "name": "libtorch",
+      "features": [
+        "cuda"
+      ]
+    },
+    "nlohmann-json",
+    "matio"
+  ]
+}

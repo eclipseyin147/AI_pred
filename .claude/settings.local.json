@@ -1,0 +1,32 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python post_process.py:*)",
+      "Bash(python -m pip install:*)",
+      "Bash(dir:*)",
+      "Bash(where:*)",
+      "Bash(cmd /c \"if exist \"\"C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA\\v12.8\"\" (echo Directory exists) else echo Directory not found\")",
+      "Bash(cmd /c \"set CUDA\")",
+      "Bash(cmd /c \"dir \"\"C:\\Program Files\\NVIDIA\\CUDNN\\v9.17\\include\"\" /b\")",
+      "Bash(cmd /c \"dir \"\"C:\\Program Files\\NVIDIA\\CUDNN\\v9.17\\lib\"\" /b\")",
+      "Bash(setx CUDNN_ROOT \"C:\\Program Files\\NVIDIA\\CUDNN\\v9.17\")",
+      "Bash(cmd /c \"dir vcpkg\\overlay-ports\\libtorch /b\")",
+      "Bash(cmd /c \"set CUDNN\")",
+      "Bash(cmd /c \"dir \"\"F:\\Program Files\\NVIDIA\"\" /b\")",
+      "Bash(cmd /c \"dir \"F:Program FilesNVIDIACUDAinclude\" /b | findstr nvtx\")",
+      "Bash(cmd /c \"dir \"F:Program FilesNVIDIA\" /b\")",
+      "Bash(nvcc:*)",
+      "WebSearch",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "Bash(curl:*)",
+      "Bash(git clone:*)",
+      "Bash(nvidia-smi:*)",
+      "Bash(vcpkg list:*)",
+      "Bash(findstr:*)",
+      "Bash(cmd /c \"dir \"\"G:\\TJU_AI_pred\\cmake-build-release\\vcpkg_installed\\x64-windows\\bin\"\" | findstr /i torch\")",
+      "Bash(cmd /c \"dir \"\"G:\\TJU_AI_pred\\cmake-build-release\\vcpkg_installed\\x64-windows\\bin\"\" | findstr /i c10\")"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}
