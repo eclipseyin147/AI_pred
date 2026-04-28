@@ -76,7 +76,7 @@ torch::Tensor Conv1DNetImpl::forward(torch::Tensor x) {
 TCNBlockImpl::  TCNBlockImpl(int64_t num_features, int64_t num_filters,
                            int64_t filter_size, int64_t dilation_factor,
                            double dropout_factor, bool is_first_block)
-    : dilation_factor(dilation_factor), is_first_block(is_first_block) {
+    : dilation_factor(dilation_factor), dropout_factor(dropout_factor), is_first_block(is_first_block) {
 
     // For causal convolution, we'll use padding=0 and manually pad left in forward()
     conv1 = register_module("conv1",
@@ -88,9 +88,10 @@ TCNBlockImpl::  TCNBlockImpl(int64_t num_features, int64_t num_filters,
 
     norm = register_module("norm", torch::nn::LayerNorm(torch::nn::LayerNormOptions({num_filters})));
 
-    // Spatial dropout using torch::nn::Dropout1d (matches MATLAB's spatialDropoutLayer)
-    // Dropout1d drops entire channels across the temporal dimension
-    dropout = register_module("dropout", torch::nn::Dropout(torch::nn::DropoutOptions(dropout_factor)));
+    // Note: Spatial dropout is implemented manually in forward() because:
+    // 1. torch::nn::Dropout1d doesn't exist in older LibTorch versions
+    // 2. Regular torch::nn::Dropout is element-wise, not channel-wise
+    // 3. MATLAB's spatialDropoutLayer drops entire channels, which we replicate manually
 
     // Skip connection for first block
     if (is_first_block) {
@@ -128,11 +129,30 @@ torch::Tensor TCNBlockImpl::forward(torch::Tensor x) {
     // ReLU activation
     x = torch::relu(x);
 
-    // Spatial Dropout using Dropout1d (matches MATLAB's spatialDropoutLayer)
-    // Dropout1d drops entire channels across the temporal dimension
-    x = x.contiguous();
-    x = dropout->forward(x);
-    x = x.contiguous();
+    // Manual Spatial Dropout (matches MATLAB's spatialDropoutLayer)
+    // This drops ENTIRE CHANNELS across all timesteps, not individual elements
+    if (is_training() && dropout_factor > 0.0) {
+        x = x.contiguous();
+
+        // Get dimensions
+        int64_t batch_size = x.size(0);
+        int64_t num_channels = x.size(1);
+        int64_t seq_length = x.size(2);
+
+        // Create channel-wise dropout mask: [batch, channels, 1]
+        // Each channel is either fully kept or fully dropped across all timesteps
+        torch::Tensor noise = torch::rand({batch_size, num_channels, 1}, x.options());
+
+        // Create binary mask: 1 if keep, 0 if drop
+        torch::Tensor mask = (noise > dropout_factor).to(x.dtype());
+
+        // Apply inverted dropout scaling: scale by 1/(1-p) to maintain expected value
+        mask = mask / (1.0 - dropout_factor);
+
+        // Apply mask - broadcasts [batch, channels, 1] across [batch, channels, seq_len]
+        x = x * mask;
+        x = x.contiguous();
+    }
 
     // Skip connection
     if (is_first_block) {
@@ -210,6 +230,7 @@ void SequenceNormalizer::fit(const std::vector<torch::Tensor>& sequences) {
 
     // Concatenate all sequences to compute global statistics
     std::vector<torch::Tensor> all_data;
+    all_data.reserve(sequences.size());
     for (const auto& seq : sequences) {
         // seq shape: [features, sequence_length]
         all_data.push_back(seq);
@@ -230,6 +251,7 @@ std::vector<torch::Tensor> SequenceNormalizer::transform(const std::vector<torch
     }
 
     std::vector<torch::Tensor> normalized;
+    normalized.reserve(sequences.size());
     for (const auto& seq : sequences) {
         // seq shape: [features, sequence_length]
         auto range = max_val - min_val;
@@ -249,6 +271,7 @@ std::vector<torch::Tensor> SequenceNormalizer::inverse_transform(const std::vect
     }
 
     std::vector<torch::Tensor> denormalized;
+    denormalized.reserve(sequences.size());
     for (const auto& seq : sequences) {
         auto range = max_val - min_val;
         range = torch::where(range == 0, torch::ones_like(range), range);

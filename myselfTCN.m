@@ -64,10 +64,7 @@ for i = 1:numBlocks
         reluLayer
         spatialDropoutLayer(dropoutFactor)
         additionLayer(2,Name="add_"+i)];
-%     convolution1dLayer(filterSize,numFilters,DilationFactor=dilationFactor,Padding="causal")
-%         layerNormalizationLayer
-%         reluLayer
-%         spatialDropoutLayer(dropoutFactor)
+
 
 
     % Add and connect layers.
@@ -92,7 +89,7 @@ for i = 1:numBlocks
 end
 
 layers = [
-    fullyConnectedLayer(48, Name="fc1")    
+    fullyConnectedLayer(48, Name="fc1")
     fullyConnectedLayer(numClasses, Name="fc2")
     softmaxLayer
     classificationLayer];

@@ -313,15 +313,9 @@ int main(int argc, char* argv[]) {
     train_config.validation_frequency = validation_frequency;
     train_config.device = device;
     train_config.optimizer_type = optimizer;
-
     // Set normalization based on mode
     // Both CNN and TCN use rescale-symmetric normalization [-1, 1]
-    if (mode == "tcn") {
-        train_config.normalize_input = true;  // TCN: rescale-symmetric normalization
-    } else {
-        train_config.normalize_input = true;  // CNN: rescale-symmetric normalization (matches MATLAB)
-    }
-
+    train_config.normalize_input = true;
     // Get model parameters from config
     int cnn_filter_size = config["model"]["cnn"]["filter_size"];
     int cnn_num_filters = config["model"]["cnn"]["num_filters"];

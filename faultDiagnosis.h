@@ -37,9 +37,9 @@ TORCH_MODULE(Conv1DNet);
 struct TCNBlockImpl : torch::nn::Module {
     torch::nn::Conv1d conv1{nullptr};
     torch::nn::LayerNorm norm{nullptr};
-    torch::nn::Dropout dropout{nullptr};  // Spatial dropout (torch::nn::Dropout1d)
     torch::nn::Conv1d skip_conv{nullptr};  // For first block to match dimensions
     int64_t dilation_factor;
+    double dropout_factor;  // Store dropout rate for manual spatial dropout implementation
     bool is_first_block;
 
     TCNBlockImpl(int64_t num_features, int64_t num_filters,
