@@ -197,6 +197,13 @@ vcpkg_cmake_config_fixup(PACKAGE_NAME Caffe2 CONFIG_PATH "share/cmake/Caffe2" DO
 vcpkg_cmake_config_fixup(PACKAGE_NAME torch CONFIG_PATH "share/cmake/Torch" DO_NOT_DELETE_PARENT_CONFIG_PATH)
 vcpkg_cmake_config_fixup(PACKAGE_NAME ATen CONFIG_PATH "share/cmake/ATen" )
 
+set(caffe2_cuda_cmake "${CURRENT_PACKAGES_DIR}/share/Caffe2/public/cuda.cmake")
+if(EXISTS "${caffe2_cuda_cmake}")
+    vcpkg_replace_string("${caffe2_cuda_cmake}"
+        "if(USE_SYSTEM_NVTX)\n  find_path(nvtx3_dir NAMES nvtx3 PATHS \${CUDA_INCLUDE_DIRS})\nelse()\n  find_path(nvtx3_dir NAMES nvtx3 PATHS \"\${PROJECT_SOURCE_DIR}/third_party/NVTX/c/include\" NO_DEFAULT_PATH)\nendif()\nfind_package_handle_standard_args(nvtx3 DEFAULT_MSG nvtx3_dir)\nif(nvtx3_FOUND)\n  add_library(torch::nvtx3 INTERFACE IMPORTED)\n  target_include_directories(torch::nvtx3 INTERFACE \"\${nvtx3_dir}\")\n  target_compile_definitions(torch::nvtx3 INTERFACE TORCH_CUDA_USE_NVTX3)\nelse()\n  message(WARNING \"Cannot find NVTX3, find old NVTX instead\")\n  add_library(torch::nvtoolsext INTERFACE IMPORTED)\n  set_property(TARGET torch::nvtoolsext PROPERTY INTERFACE_LINK_LIBRARIES CUDA::nvToolsExt)\nendif()"
+        "find_path(nvtx3_dir NAMES nvtx3\n  PATHS\n    \${CUDA_INCLUDE_DIRS}\n    \"\${PROJECT_SOURCE_DIR}/third_party/NVTX/c/include\"\n)\nfind_package_handle_standard_args(nvtx3 DEFAULT_MSG nvtx3_dir)\nif(nvtx3_FOUND)\n  add_library(torch::nvtx3 INTERFACE IMPORTED)\n  target_include_directories(torch::nvtx3 INTERFACE \"\${nvtx3_dir}\")\n  target_compile_definitions(torch::nvtx3 INTERFACE TORCH_CUDA_USE_NVTX3)\n  add_library(torch::nvtoolsext INTERFACE IMPORTED)\n  target_link_libraries(torch::nvtoolsext INTERFACE torch::nvtx3)\nelseif(TARGET CUDA::nvToolsExt)\n  message(WARNING \"Cannot find NVTX3, falling back to CUDA::nvToolsExt\")\n  add_library(torch::nvtoolsext INTERFACE IMPORTED)\n  set_property(TARGET torch::nvtoolsext PROPERTY INTERFACE_LINK_LIBRARIES CUDA::nvToolsExt)\nelse()\n  message(FATAL_ERROR \"Neither NVTX3 headers nor CUDA::nvToolsExt target are available.\")\nendif()")
+endif()
+
 vcpkg_replace_string("${CURRENT_PACKAGES_DIR}/share/torch/TorchConfig.cmake" "/../../../" "/../../")
 
 # Traverse the folder and remove "some" empty folders
