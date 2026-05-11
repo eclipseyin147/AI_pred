@@ -35,7 +35,7 @@ add_executable(tju-torch
 )
 
 target_link_libraries(tju-torch "${TORCH_LIBRARIES}" nlohmann_json::nlohmann_json)
-target_include_directories(tju-torch PRIVATE faultDiagnosis.h "${TORCH_INCLUDE_DIRS}")
+target_include_directories(tju-torch PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}" "${TORCH_INCLUDE_DIRS}")
 
 # Link matio
 if(TARGET matio::matio)
@@ -60,11 +60,20 @@ endif ()
 # Install rules
 install(TARGETS tju-torch DESTINATION bin)
 
-# Install Torch DLLs on Windows (vcpkg)
+# Install dependency DLLs on Windows
 if (WIN32)
-    set(TORCH_DLLS
+    set(VCPKG_BIN_DIR "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/bin")
+
+    # --- PyTorch Core DLLs ---
+    set(TORCH_CORE_DLLS
             c10.dll
             torch_cpu.dll
+            torch_cuda.dll
+            c10_cuda.dll
+    )
+
+    # --- PyTorch Indirect Dependencies ---
+    set(TORCH_DEP_DLLS
             glog.dll
             gflags.dll
             openblas.dll
@@ -75,16 +84,61 @@ if (WIN32)
             libgfortran-5.dll
             abseil_dll.dll
             libquadmath-0.dll
+            sleef.dll
+            magma.dll
     )
-    foreach (DLL ${TORCH_DLLS})
-        file(GLOB DLL_FILE "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/bin/${DLL}")
-        if (DLL_FILE)
-            list(APPEND ALL_DLLS ${DLL_FILE})
-        endif ()
+
+    # --- matio & HDF5 Dependencies ---
+    set(MATIO_DLLS
+            libmatio.dll
+            hdf5.dll
+            szip.dll
+            zlib1.dll
+    )
+
+    # --- MinGW Runtime (required by openblas / liblapack / libgfortran) ---
+    set(MINGW_DLLS
+            libgcc_s_seh-1.dll
+            libwinpthread-1.dll
+    )
+
+    set(ALL_DEP_DLLS)
+    foreach (DLL_LIST IN ITEMS TORCH_CORE_DLLS TORCH_DEP_DLLS MATIO_DLLS MINGW_DLLS)
+        foreach (DLL ${${DLL_LIST}})
+            set(DLL_PATH "${VCPKG_BIN_DIR}/${DLL}")
+            if (EXISTS "${DLL_PATH}")
+                list(APPEND ALL_DEP_DLLS "${DLL_PATH}")
+            else ()
+                message(WARNING "Dependency DLL not found in vcpkg: ${DLL}")
+            endif ()
+        endforeach ()
     endforeach ()
 
-    if (ALL_DLLS)
-        install(FILES ${ALL_DLLS} DESTINATION bin)
+    # --- CUDA Runtime DLLs (auto-detect from CUDA_PATH) ---
+    if (DEFINED ENV{CUDA_PATH})
+        set(CUDA_BIN_DIR "$ENV{CUDA_PATH}/bin")
+        set(CUDA_RUNTIME_DLLS
+                cublas64_12.dll
+                cublasLt64_12.dll
+                cufft64_11.dll
+                cusolver64_11.dll
+                cusparse64_12.dll
+                cudart64_12.dll
+        )
+        foreach (DLL ${CUDA_RUNTIME_DLLS})
+            set(DLL_PATH "${CUDA_BIN_DIR}/${DLL}")
+            if (EXISTS "${DLL_PATH}")
+                list(APPEND ALL_DEP_DLLS "${DLL_PATH}")
+            else ()
+                message(WARNING "CUDA runtime DLL not found: ${DLL_PATH}")
+            endif ()
+        endforeach ()
+    else ()
+        message(STATUS "CUDA_PATH not set; CUDA runtime DLLs will not be installed.")
+    endif ()
+
+    if (ALL_DEP_DLLS)
+        install(FILES ${ALL_DEP_DLLS} DESTINATION bin)
     endif ()
 endif ()
 

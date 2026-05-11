@@ -41,19 +41,28 @@ The project name is `tju-torch` (CMake project name). It was created by `siqi` a
 ├── CMakeLists.txt              # Main CMake configuration
 ├── vcpkg.json                  # vcpkg manifest
 ├── vcpkg-configuration.json    # vcpkg overlay ports config
-├── config.json                 # Default FFN training config (AdamW)
-├── config_adamw.json           # FFN config (AdamW variant)
-├── config_rmsprop.json         # FFN config (RMSprop variant)
-├── faultDiag_config.json       # Default fault diagnosis config (CNN mode)
-├── faultDiag_config_cnn.json   # CNN-specific config
-├── faultDiag_config_tcn.json   # TCN-specific config
-├── faultDiag_config_test.json  # Synthetic data test config
+├── unified_config.json         # Unified config for single executable
+├── config.json                 # Legacy FFN training config (kept for reference)
+├── config_adamw.json           # Legacy FFN config
+├── config_rmsprop.json         # Legacy FFN config
+├── faultDiag_config.json       # Legacy fault diagnosis config
+├── faultDiag_config_cnn.json   # Legacy CNN config
+├── faultDiag_config_tcn.json   # Legacy TCN config
+├── faultDiag_config_test.json  # Legacy test config
 │
-├── prediction_model_FFN.cpp    # FFN lifespan predictor (regression)
-├── predictionSEDM.cpp          # SEDM + FFN hybrid predictor
-├── faultDiagMain.cpp           # Fault diagnosis CLI entry point
+├── unified_main.cpp            # Unified executable entry point
+├── common_ffn.h                # Shared FFN, normalizers, metrics
+├── ffn_manager.h/.cpp          # FFN training manager class
+├── sedm_manager.h/.cpp         # SEDM hybrid prediction manager class
+├── faultdiag_manager.h/.cpp    # Fault diagnosis manager class
+├── training_controller.h/.cpp  # Qt IPC control/status module
+│
 ├── faultDiagnosis.cpp          # CNN/TCN model implementations
 ├── faultDiagnosis.h            # Core ML classes and trainers
+│
+├── prediction_model_FFN.cpp    # Legacy standalone FFN (preserved, not built)
+├── predictionSEDM.cpp          # Legacy standalone SEDM (preserved, not built)
+├── faultDiagMain.cpp           # Legacy fault diagnosis CLI (preserved, not built)
 │
 ├── Prediction_model_1.m        # MATLAB reference: FFN training
 ├── Prediction_model_2.m        # MATLAB reference: SEDM hybrid prediction
@@ -106,89 +115,159 @@ On Windows, this also copies required Torch DLLs (`c10.dll`, `torch_cpu.dll`, et
 
 ### Build Outputs
 
-Three executables are produced:
+A single unified executable is produced (legacy executables are preserved in source but no longer built):
 
 | Executable | Source Files | Purpose |
 |------------|--------------|---------|
-| `FFNPredictor` | `prediction_model_FFN.cpp` | Train FFN for voltage prediction |
-| `SEDM` | `predictionSEDM.cpp` | Hybrid SEDM+FFN prediction |
-| `faultDiag` | `faultDiagMain.cpp`, `faultDiagnosis.cpp` | Train/evaluate CNN or TCN classifiers |
+| `tju-torch` | `unified_main.cpp`, `ffn_manager.cpp`, `sedm_manager.cpp`, `faultdiag_manager.cpp`, `faultDiagnosis.cpp`, `training_controller.cpp` | Unified entry point dispatching to FFN, SEDM, or fault diagnosis via JSON `mode` |
+
+**Legacy sources** (`prediction_model_FFN.cpp`, `predictionSEDM.cpp`, `faultDiagMain.cpp`) are kept in the repository for reference but removed from the CMake build target.
 
 ---
 
 ## Runtime Architecture
 
-### 1. FFNPredictor (Regression)
+The unified executable `tju-torch.exe` reads a single JSON config file and dispatches to the appropriate manager class based on the top-level `mode` field.
 
-- **Input**: Plain-text data file (`Data_V13_40kW.txt`)
-- **Preprocessing**: Sliding window with `w=5`, min-max normalization to `[-1, 1]` (MATLAB `mapminmax` equivalent)
-- **Model**: 3-layer FFN with sigmoid activations on hidden layers
-- **Optimizers Supported**: LBFGS, Adam, AdamW, RMSprop (configured via JSON)
-- **Output**: `best_model.pt`, `predictions.csv`, `training_log.csv`
-- **Early Stopping**: Stops when R² > `target_r2` (default 0.85)
-
-Run:
 ```powershell
-.\FFNPredictor.exe [config.json]
+.\tju-torch.exe [config_file.json]
 ```
 
-### 2. SEDM (Hybrid Model)
+If no config file is provided, defaults to `unified_config.json`.
 
-- Loads pre-trained `best_model.pt` (or trains if missing)
-- Runs the neural network (DDM) alongside the physics-based SEDM
-- Combines predictions with dynamic weighting: `V_hybrid = (RR * V_SEM + V_DDM) / (RR + 1)` where `RR = 4`
-- Outputs `hybrid_predictions.csv`
-- Python post-processing generates charts and `evaluation_report.txt`
+### 1. FFN Mode (`"mode": "ffn"`)
 
-Run:
-```powershell
-.\SEDM.exe
-python post_process.py
-```
+Managed by `FFNManager` (`ffn_manager.cpp`).
+- **Input**: Plain-text data file (path from JSON `input_data_path`)
+- **Preprocessing**: Sliding window with configurable `window_size`, pluggable normalization
+- **Model**: Generalized FFN with configurable hidden layer count and neuron counts
+- **Optimizers Supported**: LBFGS, Adam, AdamW, RMSprop
+- **Outputs**: Model `.pt`, `predictions.csv`, `training_log.csv`, `status.json`
+- **Metrics**: R², RMSE, MAE
+- **Control**: Supports pause/resume/stop/restart via `control.json`
 
-### 3. faultDiag (Sequence Classification)
+### 2. SEDM Mode (`"mode": "sedm"`)
 
-- **Input**: MATLAB `.mat` files (via `matio` library)
-- **Modes**:
-  - `cnn` — 1D CNN with global max pooling
-  - `tcn` — Temporal Convolutional Network with dilated causal convolutions
-  - `test` — Synthetic data smoke test
-- **Data Variables**: Configurable via JSON (e.g., `AXTrain3`, `AYTrain`)
-- **Output**: Saved model `.pt`, confusion matrix, accuracy metrics
+Managed by `SEDMManager` (`sedm_manager.cpp`).
+- Loads pre-trained model (path from JSON `model_path`) or trains fallback
+- Runs DDM neural network alongside physics-based SEDM
+- Combines predictions: `V_hybrid = (RR * V_SEM + V_DDM) / (RR + 1)`
+- **Outputs**: `hybrid_predictions.csv`, `status.json`
+- **Metrics**: R², RMSE, MAE for SEM / DDM / Hybrid
+- **Control**: Supports pause/resume/stop/restart via `control.json`
 
-Run:
-```powershell
-.\faultDiag.exe [config_file.json]
-```
+### 3. FaultDiag Mode (`"mode": "faultdiag"`)
 
-Default config is `faultDiag_config.json`.
+Managed by `FaultDiagManager` (`faultdiag_manager.cpp`).
+- **Input**: MATLAB `.mat` files (path from JSON `input_mat_path`)
+- **Submodes** (`submode`): `cnn`, `tcn`, `test`
+- **Outputs**: Saved model `.pt`, confusion matrix, accuracy metrics, `status.json`
+- **Control**: Supports pause/resume/stop/restart via `control.json`
+
+---
 
 ---
 
 ## Configuration System
 
-All executables use **JSON configuration files**. Key schemas:
+The unified executable uses a single JSON configuration file. The top-level `mode` field selects the task. All file paths **must be explicitly provided** in the JSON — there are no hard-coded defaults.
 
-### FFN Config (`config.json`)
+### Unified Config Schema (`unified_config.json`)
+
 ```json
 {
-  "optimizer": { "type": "adamw", "adamw": { "learning_rate": 0.001, ... } },
-  "training": { "epochs": 15000, "goal_loss": 2e-5, "max_iterations": 1000, "target_r2": 0.85 },
-  "model": { "hidden_layer1": 50, "hidden_layer2": 50 },
-  "data": { "window_size": 5, "train_samples": 300, "data_file": "Data_V13_40kW.txt", "num_rows": 900 }
+  "mode": "ffn",
+  "ffn": {
+    "input_data_path": "Data_V13_40kW.txt",
+    "output_model_path": "ffn_best_model.pt",
+    "output_predictions_path": "predictions.csv",
+    "output_training_log_path": "training_log.csv",
+    "control_file_path": "control.json",
+    "status_file_path": "status.json",
+    "hidden_layers": 2,
+    "hidden_layer_neurons": [50, 50],
+    "learning_rate": 0.001,
+    "epochs": 15000,
+    "batch_size": 32,
+    "optimizer_type": "adamw",
+    "optimizer": { "adamw": { "learning_rate": 0.001, "beta1": 0.9, "beta2": 0.999, "eps": 1e-10, "weight_decay": 0.001 } },
+    "normalization": { "enabled": true, "method": "minmax_neg1_1" },
+    "goal_loss": 2e-5,
+    "max_iterations": 1000,
+    "target_r2": 0.85,
+    "print_interval": 200,
+    "window_size": 5,
+    "train_samples": 300,
+    "num_rows": 900
+  },
+  "sedm": {
+    "input_data_path": "Data_V13_40kW.txt",
+    "model_path": "sedm_best_model.pt",
+    "output_predictions_path": "hybrid_predictions.csv",
+    "control_file_path": "control.json",
+    "status_file_path": "status.json",
+    "hidden_layers": 2,
+    "hidden_layer_neurons": [50, 50],
+    "learning_rate": 1.0,
+    "epochs": 1000,
+    "batch_size": 32,
+    "optimizer_type": "lbfgs",
+    "optimizer": { "lbfgs": { "learning_rate": 1.0, "max_iter": 20, "max_eval": 25, "tolerance_grad": 1e-7, "tolerance_change": 1e-9, "history_size": 100 } },
+    "normalization": { "enabled": true, "method": "minmax_neg1_1" },
+    "goal_loss": 1e-10,
+    "window_size": 5,
+    "train_samples": 300,
+    "num_rows": 900,
+    "rr": 4.0
+  },
+  "faultdiag": {
+    "submode": "tcn",
+    "input_mat_path": "ALL_Traindata1.mat",
+    "output_model_path": "fault_best_model.pt",
+    "control_file_path": "control.json",
+    "status_file_path": "status.json",
+    "hidden_layers": 2,
+    "hidden_layer_neurons": [64, 48],
+    "learning_rate": 0.001,
+    "epochs": 100,
+    "batch_size": 26,
+    "optimizer": "adam",
+    "use_gpu": false,
+    "data_var": "AXTrain3",
+    "label_var": "AYTrain",
+    "val_data_var": "AXTest3",
+    "val_label_var": "AYTest",
+    "train_split": 0.8,
+    "validation_frequency": 10,
+    "normalization": { "enabled": true, "method": "rescale_symmetric" },
+    "cnn_filter_size": 2,
+    "cnn_num_filters": 32,
+    "tcn_num_blocks": 4,
+    "tcn_num_filters": 64,
+    "tcn_filter_size": 3,
+    "tcn_dropout": 0.005
+  }
 }
 ```
 
-### Fault Diagnosis Config
-```json
-{
-  "mode": "tcn",
-  "data": { "mat_file": "ALL_Traindata1.mat", "data_var": "AXTrain3", "label_var": "AYTrain", "train_split": 0.8 },
-  "training": { "epochs": 100, "batch_size": 26, "learning_rate": 0.001, "optimizer": "adam", "use_gpu": false },
-  "model": { "cnn": { ... }, "tcn": { "num_blocks": 4, "num_filters": 64, "filter_size": 3, "dropout": 0.005 } },
-  "output": { "model_save_path": "best_model.pt" }
-}
-```
+#### Normalization Methods
+
+| Method String | Description |
+|---------------|-------------|
+| `minmax_neg1_1` | Min-Max to [-1, 1] (MATLAB `mapminmax` style) |
+| `minmax_0_1` | Min-Max to [0, 1] |
+| `z_score` | StandardScaler: (x - mean) / std |
+| `none` / `disabled` | No normalization |
+
+For fault diagnosis, `rescale_symmetric` is an alias for `minmax_neg1_1`.
+
+#### Required File Path Fields (per mode)
+
+| Mode | Required Path Fields |
+|------|---------------------|
+| `ffn` | `input_data_path`, `output_model_path`, `output_predictions_path`, `output_training_log_path`, `control_file_path`, `status_file_path` |
+| `sedm` | `input_data_path`, `model_path`, `output_predictions_path`, `control_file_path`, `status_file_path` |
+| `faultdiag` | `input_mat_path`, `output_model_path`, `control_file_path`, `status_file_path` |
 
 ---
 
@@ -306,11 +385,149 @@ There is **no automated unit test framework** (no GoogleTest, Catch2, etc.). Tes
 
 ---
 
+## Qt Frontend Integration
+
+The unified executable `tju-torch.exe` is designed to be controlled by a Qt desktop application via **JSON file-based IPC**. No network sockets or shared memory are required — Qt simply writes a control file and periodically reads a status file.
+
+### Launching the Executable from Qt
+
+```cpp
+#include <QProcess>
+#include <QFile>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QTimer>
+
+// 1. Start the process
+QProcess *process = new QProcess(parent);
+process->setProgram("tju-torch.exe");
+process->setArguments({"unified_config.json"});  // or any config file
+process->start();
+
+// 2. Poll status.json periodically (e.g., every 500 ms)
+QTimer *timer = new QTimer(parent);
+connect(timer, &QTimer::timeout, [=]() {
+    QFile file("status.json");
+    if (!file.open(QIODevice::ReadOnly)) return;
+    QByteArray data = file.readAll();
+    file.close();
+
+    QJsonDocument doc = QJsonDocument::fromJson(data);
+    QJsonObject status = doc.object();
+
+    int epoch = status["epoch"].toInt();
+    int total = status["total_epochs"].toInt();
+    QString state = status["state"].toString();  // "running", "paused", "stopped", "completed"
+    double loss = status["loss"].toDouble();
+    double r2   = status["best_r2"].toDouble();
+    double rmse = status["rmse"].toDouble();
+    double mae  = status["mae"].toDouble();
+    QString msg = status["message"].toString();
+
+    // Update UI progress bars, labels, etc.
+});
+timer->start(500);
+```
+
+### Control File (`control.json`)
+
+Qt writes commands to the control file. The executable polls this file once per epoch.
+
+```json
+{
+  "command": "pause",
+  "timestamp_ms": 1715432100123
+}
+```
+
+| Command | Effect |
+|---------|--------|
+| `run` | Default state; no action if already running |
+| `pause` | Pause training after current epoch; save checkpoint |
+| `resume` | Resume from paused state |
+| `stop` | Gracefully stop training; save checkpoint and exit |
+| `restart` | Clear checkpoint files and restart training from scratch |
+
+**Qt Example — Pause Button:**
+```cpp
+void MainWindow::onPauseClicked() {
+    QFile file("control.json");
+    if (file.open(QIODevice::WriteOnly)) {
+        QJsonObject obj;
+        obj["command"] = "pause";
+        obj["timestamp_ms"] = QDateTime::currentDateTimeUtc().toMSecsSinceEpoch();
+        file.write(QJsonDocument(obj).toJson(QJsonDocument::Compact));
+        file.close();
+    }
+}
+```
+
+### Status File (`status.json`)
+
+The executable writes its current state after every epoch (and immediately upon state changes). Qt should read this file periodically.
+
+```json
+{
+  "mode": "ffn",
+  "state": "running",
+  "epoch": 150,
+  "total_epochs": 1000,
+  "loss": 0.00123,
+  "best_r2": 0.92,
+  "rmse": 0.045,
+  "mae": 0.032,
+  "message": "Training iteration 2, epoch 150",
+  "timestamp_ms": 1715432101000
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `mode` | string | `"ffn"`, `"sedm"`, or `"faultdiag"` |
+| `state` | string | `"idle"`, `"running"`, `"paused"`, `"stopped"`, `"completed"` |
+| `epoch` | int | Current epoch number |
+| `total_epochs` | int | Total epochs configured |
+| `loss` | double | Current training loss |
+| `best_r2` | double | Best R² achieved so far (FFN/SEDM) |
+| `rmse` | double | Current RMSE |
+| `mae` | double | Current MAE |
+| `message` | string | Human-readable status message |
+| `timestamp_ms` | int64 | Monotonic timestamp for freshness check |
+
+### Checkpoint System
+
+When `pause` or `stop` is issued, the executable automatically saves:
+- **Model checkpoint**: `<output_model_path>.checkpoint.pt`
+- **Metadata checkpoint**: `<output_model_path>.checkpoint.json`
+
+The metadata JSON contains:
+```json
+{
+  "iteration": 2,
+  "epoch": 150,
+  "best_r2": 0.92,
+  "hidden_layer_neurons": [50, 50]
+}
+```
+
+On startup, if a checkpoint exists **and** no `restart` command is pending, the executable automatically resumes from the checkpoint. To force a fresh start, send `restart` before launching (or delete the `.checkpoint.pt` and `.checkpoint.json` files).
+
+### Thread Safety & Atomic Writes
+
+Both control and status files are written using **atomic rename** (write to `.tmp`, then `std::filesystem::rename`). This prevents race conditions where Qt and the C++ process access the file simultaneously. Qt does not need file locking — simply open, read/write, and close quickly.
+
+### File Path Configuration
+
+All IPC file paths are **configurable via JSON** (`control_file_path`, `status_file_path`). The Qt application and the JSON config must agree on these paths. No paths are hard-coded in the executable.
+
+---
+
 ## File Reference for Agents
 
 - **To modify model architecture**: Edit `faultDiagnosis.h` (declarations) and `faultDiagnosis.cpp` (implementations).
-- **To modify FFN training**: Edit `prediction_model_FFN.cpp`.
-- **To modify hybrid prediction**: Edit `predictionSEDM.cpp`.
-- **To modify fault diagnosis CLI**: Edit `faultDiagMain.cpp`.
-- **To add a new optimizer**: Update the `SequenceTrainer` constructor in `faultDiagnosis.h` and `prediction_model_FFN.cpp`.
-- **To change data preprocessing**: Update `SequenceNormalizer` or `MinMaxScaler` classes.
+- **To modify FFN training**: Edit `ffn_manager.h` and `ffn_manager.cpp`.
+- **To modify hybrid prediction**: Edit `sedm_manager.h` and `sedm_manager.cpp`.
+- **To modify fault diagnosis CLI**: Edit `faultdiag_manager.h` and `faultdiag_manager.cpp`.
+- **To modify Qt IPC behavior**: Edit `training_controller.h` and `training_controller.cpp`.
+- **To add a new optimizer**: Update the `SequenceTrainer` constructor in `faultDiagnosis.h` and the optimizer dispatch in `ffn_manager.cpp` / `sedm_manager.cpp`.
+- **To change data preprocessing**: Update `common_ffn.h` (`DataNormalizer` hierarchy) or `SequenceNormalizer` in `faultDiagnosis.h` / `faultDiagnosis.cpp`.
