@@ -228,19 +228,23 @@ torch::Tensor TCNNetImpl::forward(torch::Tensor x) {
 void SequenceNormalizer::fit(const std::vector<torch::Tensor>& sequences) {
     if (sequences.empty()) return;
 
-    // Concatenate all sequences to compute global statistics
     std::vector<torch::Tensor> all_data;
     all_data.reserve(sequences.size());
     for (const auto& seq : sequences) {
-        // seq shape: [features, sequence_length]
         all_data.push_back(seq);
     }
 
     torch::Tensor concat_data = torch::cat(all_data, 1);  // [features, total_length]
 
-    // Compute min and max for rescale-symmetric normalization
-    min_val = std::get<0>(concat_data.min(1));  // [features]
-    max_val = std::get<0>(concat_data.max(1));  // [features]
+    if (method == SequenceNormMethod::Z_SCORE) {
+        mean = concat_data.mean(1);  // [features]
+        std_dev = concat_data.std(1, true);
+        std_dev = torch::where(std_dev == 0, torch::ones_like(std_dev), std_dev);
+    } else {
+        // Min-max variants
+        min_val = std::get<0>(concat_data.min(1));  // [features]
+        max_val = std::get<0>(concat_data.max(1));  // [features]
+    }
 
     fitted = true;
 }
@@ -253,12 +257,19 @@ std::vector<torch::Tensor> SequenceNormalizer::transform(const std::vector<torch
     std::vector<torch::Tensor> normalized;
     normalized.reserve(sequences.size());
     for (const auto& seq : sequences) {
-        // seq shape: [features, sequence_length]
-        auto range = max_val - min_val;
-        range = torch::where(range == 0, torch::ones_like(range), range);
-
-        // Rescale to [-1, 1] (MATLAB's rescale-symmetric)
-        auto norm_seq = 2.0 * (seq - min_val.unsqueeze(1)) / range.unsqueeze(1) - 1.0;
+        torch::Tensor norm_seq;
+        if (method == SequenceNormMethod::Z_SCORE) {
+            norm_seq = (seq - mean.unsqueeze(1)) / std_dev.unsqueeze(1);
+        } else {
+            auto range = max_val - min_val;
+            range = torch::where(range == 0, torch::ones_like(range), range);
+            if (method == SequenceNormMethod::MINMAX_0_1) {
+                norm_seq = (seq - min_val.unsqueeze(1)) / range.unsqueeze(1);
+            } else {
+                // RESCALE_SYMMETRIC: [-1, 1]
+                norm_seq = 2.0 * (seq - min_val.unsqueeze(1)) / range.unsqueeze(1) - 1.0;
+            }
+        }
         normalized.push_back(norm_seq);
     }
 
@@ -273,11 +284,19 @@ std::vector<torch::Tensor> SequenceNormalizer::inverse_transform(const std::vect
     std::vector<torch::Tensor> denormalized;
     denormalized.reserve(sequences.size());
     for (const auto& seq : sequences) {
-        auto range = max_val - min_val;
-        range = torch::where(range == 0, torch::ones_like(range), range);
-
-        // Inverse rescale from [-1, 1]
-        auto denorm_seq = (seq + 1.0) * range.unsqueeze(1) / 2.0 + min_val.unsqueeze(1);
+        torch::Tensor denorm_seq;
+        if (method == SequenceNormMethod::Z_SCORE) {
+            denorm_seq = seq * std_dev.unsqueeze(1) + mean.unsqueeze(1);
+        } else {
+            auto range = max_val - min_val;
+            range = torch::where(range == 0, torch::ones_like(range), range);
+            if (method == SequenceNormMethod::MINMAX_0_1) {
+                denorm_seq = seq * range.unsqueeze(1) + min_val.unsqueeze(1);
+            } else {
+                // RESCALE_SYMMETRIC: [-1, 1]
+                denorm_seq = (seq + 1.0) * range.unsqueeze(1) / 2.0 + min_val.unsqueeze(1);
+            }
+        }
         denormalized.push_back(denorm_seq);
     }
 
@@ -285,14 +304,21 @@ std::vector<torch::Tensor> SequenceNormalizer::inverse_transform(const std::vect
 }
 
 void SequenceNormalizer::save(const std::string& filename) {
-    torch::save({min_val, max_val}, filename);
+    torch::save({min_val, max_val, mean, std_dev}, filename);
 }
 
 void SequenceNormalizer::load(const std::string& filename) {
     std::vector<torch::Tensor> tensors;
     torch::load(tensors, filename);
-    min_val = tensors[0];
-    max_val = tensors[1];
+    if (tensors.size() >= 4) {
+        min_val = tensors[0];
+        max_val = tensors[1];
+        mean = tensors[2];
+        std_dev = tensors[3];
+    } else {
+        min_val = tensors[0];
+        max_val = tensors[1];
+    }
     fitted = true;
 }
 

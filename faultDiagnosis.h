@@ -13,6 +13,7 @@
 #include <iomanip>
 #include <algorithm>
 #include <torch/nn/modules/dropout.h>
+#include "training_controller.h"
 namespace lifespanPred {
 
 // ============================================================================
@@ -70,15 +71,25 @@ TORCH_MODULE(TCNNet);
 // ============================================================================
 // Data Normalization (MATLAB's rescale-symmetric: [-1, 1])
 // ============================================================================
+enum class SequenceNormMethod {
+    RESCALE_SYMMETRIC,  // [-1, 1] (original MATLAB behavior)
+    MINMAX_0_1,         // [0, 1]
+    Z_SCORE             // (x - mean) / std
+};
+
 class SequenceNormalizer {
 public:
+    SequenceNormMethod method = SequenceNormMethod::RESCALE_SYMMETRIC;
     torch::Tensor mean, std_dev, min_val, max_val;
     bool fitted = false;
+
+    explicit SequenceNormalizer(SequenceNormMethod m = SequenceNormMethod::RESCALE_SYMMETRIC)
+        : method(m) {}
 
     // Fit normalizer on training data
     void fit(const std::vector<torch::Tensor>& sequences);
 
-    // Transform sequences to [-1, 1] range (rescale-symmetric)
+    // Transform sequences based on selected method
     std::vector<torch::Tensor> transform(const std::vector<torch::Tensor>& sequences);
 
     // Inverse transform
@@ -119,6 +130,7 @@ struct TrainingConfig {
 
     // Data normalization
     bool normalize_input = false;  // Set to true for TCN, false for CNN
+    SequenceNormMethod normalization_method = SequenceNormMethod::RESCALE_SYMMETRIC;
 
     // Adam optimizer parameters
     double adam_beta1 = 0.9;
@@ -128,6 +140,10 @@ struct TrainingConfig {
 
     // Model save path
     std::string model_save_path = "best_model.pt";
+
+    // Control files for Qt frontend IPC
+    std::string control_file_path = "control.json";
+    std::string status_file_path = "status.json";
 };
 
 // ============================================================================
@@ -142,7 +158,7 @@ public:
     SequenceNormalizer normalizer;
 
     SequenceTrainer(ModelType model_ptr, TrainingConfig cfg)
-        : model(model_ptr), config(cfg) {
+        : model(model_ptr), config(cfg), normalizer(cfg.normalization_method) {
 
         // Move model to device
         model->to(config.device);
@@ -179,7 +195,8 @@ public:
     void train(const std::vector<torch::Tensor>& train_sequences,
                const std::vector<int64_t>& train_labels,
                const std::vector<torch::Tensor>& val_sequences = {},
-               const std::vector<int64_t>& val_labels = {});
+               const std::vector<int64_t>& val_labels = {},
+               tju_torch::TrainingController* controller = nullptr);
 
     // Evaluate the model
     double evaluate(const std::vector<torch::Tensor>& sequences,
@@ -231,7 +248,8 @@ template<typename ModelType>
 void SequenceTrainer<ModelType>::train(const std::vector<torch::Tensor>& train_sequences,
                                        const std::vector<int64_t>& train_labels,
                                        const std::vector<torch::Tensor>& val_sequences,
-                                       const std::vector<int64_t>& val_labels) {
+                                       const std::vector<int64_t>& val_labels,
+                                       tju_torch::TrainingController* controller) {
     // Normalize data if enabled (TCN uses normalization, CNN doesn't)
     std::vector<torch::Tensor> norm_train_sequences;
     if (config.normalize_input) {
@@ -246,12 +264,78 @@ void SequenceTrainer<ModelType>::train(const std::vector<torch::Tensor>& train_s
 
     std::cout << "Starting training for " << config.max_epochs << " epochs..." << std::endl;
     if (config.normalize_input) {
-        std::cout << "Input normalization: ENABLED (rescale-symmetric [-1,1])" << std::endl;
+        std::string method_name = "rescale-symmetric [-1,1]";
+        if (config.normalization_method == SequenceNormMethod::MINMAX_0_1) method_name = "minmax [0,1]";
+        if (config.normalization_method == SequenceNormMethod::Z_SCORE) method_name = "z-score";
+        std::cout << "Input normalization: ENABLED (" << method_name << ")" << std::endl;
     } else {
         std::cout << "Input normalization: DISABLED" << std::endl;
     }
 
+    if (controller) {
+        controller->update_status("faultdiag", "running", 0, static_cast<int>(config.max_epochs),
+                                  0.0, 0.0, 0.0, 0.0, "Training started");
+    }
+
     for (int64_t epoch = 0; epoch < config.max_epochs; ++epoch) {
+        // Check control commands
+        if (controller) {
+            std::string cmd = controller->read_command();
+            if (cmd == "pause") {
+                controller->acknowledge_command();
+                controller->update_status("faultdiag", "paused", static_cast<int>(epoch),
+                                          static_cast<int>(config.max_epochs), 0.0, 0.0, 0.0, 0.0,
+                                          "Paused by user");
+                // Save checkpoint
+                save_model(config.model_save_path + ".checkpoint.pt");
+                nlohmann::json meta = {{"epoch", epoch}, {"best_val_acc", best_val_acc}};
+                controller->save_checkpoint_meta(config.model_save_path + ".checkpoint.json", meta);
+                std::cout << "Checkpoint saved. Waiting for resume..." << std::endl;
+
+                std::string resume_cmd = controller->wait_for_resume();
+                if (resume_cmd == "stop") {
+                    controller->update_status("faultdiag", "stopped", static_cast<int>(epoch),
+                                              static_cast<int>(config.max_epochs), 0.0, 0.0, 0.0, 0.0,
+                                              "Stopped by user");
+                    return;
+                }
+                if (resume_cmd == "restart") {
+                    controller->clear_checkpoint(config.model_save_path + ".checkpoint.json",
+                                                 config.model_save_path + ".checkpoint.pt");
+                    controller->update_status("faultdiag", "running", 0,
+                                              static_cast<int>(config.max_epochs), 0.0, 0.0, 0.0, 0.0,
+                                              "Restarting fresh");
+                    epoch = -1;
+                    best_val_acc = 0.0;
+                    continue;
+                }
+                controller->update_status("faultdiag", "running", static_cast<int>(epoch),
+                                          static_cast<int>(config.max_epochs), 0.0, 0.0, 0.0, 0.0,
+                                          "Resumed");
+            }
+            if (cmd == "stop") {
+                controller->acknowledge_command();
+                save_model(config.model_save_path + ".checkpoint.pt");
+                nlohmann::json meta = {{"epoch", epoch}, {"best_val_acc", best_val_acc}};
+                controller->save_checkpoint_meta(config.model_save_path + ".checkpoint.json", meta);
+                controller->update_status("faultdiag", "stopped", static_cast<int>(epoch),
+                                          static_cast<int>(config.max_epochs), 0.0, 0.0, 0.0, 0.0,
+                                          "Stopped by user");
+                return;
+            }
+            if (cmd == "restart") {
+                controller->acknowledge_command();
+                controller->clear_checkpoint(config.model_save_path + ".checkpoint.json",
+                                             config.model_save_path + ".checkpoint.pt");
+                controller->update_status("faultdiag", "running", 0,
+                                          static_cast<int>(config.max_epochs), 0.0, 0.0, 0.0, 0.0,
+                                          "Restarting fresh");
+                epoch = -1;
+                best_val_acc = 0.0;
+                continue;
+            }
+        }
+
         model->train();
 
         double total_loss = 0.0;
@@ -328,10 +412,24 @@ void SequenceTrainer<ModelType>::train(const std::vector<torch::Tensor>& train_s
             }
 
             std::cout << std::endl;
+
+            // Update controller status
+            if (controller) {
+                controller->update_status("faultdiag", "running", static_cast<int>(epoch + 1),
+                                          static_cast<int>(config.max_epochs), avg_loss, 0.0,
+                                          0.0, 0.0,
+                                          "Epoch " + std::to_string(epoch + 1));
+            }
         }
     }
 
     std::cout << "Training completed!" << std::endl;
+    if (controller) {
+        controller->update_status("faultdiag", "completed",
+                                  static_cast<int>(config.max_epochs),
+                                  static_cast<int>(config.max_epochs), 0.0,
+                                  0.0, 0.0, 0.0, "Training completed");
+    }
 }
 
 template<typename ModelType>
