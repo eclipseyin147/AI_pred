@@ -198,7 +198,9 @@ The unified executable uses a single JSON configuration file. The top-level `mod
     "print_interval": 200,
     "window_size": 5,
     "train_samples": 300,
-    "num_rows": 900
+    "num_rows": 900,
+    "input_columns": [4, 5, 8, 10],
+    "output_column": 11
   },
   "sedm": {
     "input_data_path": "Data_V13_40kW.txt",
@@ -218,7 +220,10 @@ The unified executable uses a single JSON configuration file. The top-level `mod
     "window_size": 5,
     "train_samples": 300,
     "num_rows": 900,
-    "rr": 4.0
+    "rr": 4.0,
+    "input_columns": [4, 5, 8, 10],
+    "output_column": 11,
+    "time_column": 0
   },
   "faultdiag": {
     "submode": "tcn",
@@ -260,6 +265,23 @@ The unified executable uses a single JSON configuration file. The top-level `mod
 | `none` / `disabled` | No normalization |
 
 For fault diagnosis, `rescale_symmetric` is an alias for `minmax_neg1_1`.
+
+#### Column Selection (txt/csv modes)
+
+For `ffn` and `sedm` modes, the input features and output target are selected by column index (0-based) instead of hard-coded positions:
+
+| Field | Type | Mode | Description |
+|-------|------|------|-------------|
+| `input_columns` | `int[]` | `ffn`, `sedm` | 0-based column indices to use as neural-network input features |
+| `output_column` | `int` | `ffn`, `sedm` | 0-based column index to use as the prediction target |
+| `time_column` | `int` | `sedm` | 0-based column index for the time variable used by the SEDM physics model |
+
+If these fields are omitted, the defaults match the original hard-coded behavior:
+- `input_columns`: `[4, 5, 8, 10]`
+- `output_column`: `11`
+- `time_column`: `0`
+
+> **SEDM note**: The SEDM physics model expects `input_columns` to contain at least 4 columns mapping to `[Pc, Pa, T, I]` in that order.
 
 #### Required File Path Fields (per mode)
 

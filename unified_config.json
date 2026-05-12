@@ -7,6 +7,8 @@
     "output_training_log_path": "training_log.csv",
     "control_file_path": "control.json",
     "status_file_path": "status.json",
+    "input_columns": [4, 5, 8, 10],
+    "output_column": 11,
     "hidden_layers": 2,
     "hidden_layer_neurons": [50, 50],
     "learning_rate": 0.001,
@@ -84,6 +86,9 @@
       "method": "minmax_neg1_1"
     },
     "goal_loss": 1e-10,
+    "input_columns": [4, 5, 8, 10],
+    "output_column": 11,
+    "time_column": 0,
     "window_size": 5,
     "train_samples": 300,
     "num_rows": 900,

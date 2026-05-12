@@ -53,6 +53,25 @@ void FFNManager::run(const nlohmann::json& config) {
     int window_size = config.value("window_size", 5);
     int numTimeStepsTrain = config.value("train_samples", 300);
 
+    // Read column configuration for input/output selection
+    std::vector<int> input_columns;
+    if (config.contains("input_columns") && config["input_columns"].is_array()) {
+        for (const auto& item : config["input_columns"]) {
+            input_columns.push_back(item.get<int>());
+        }
+    }
+    if (input_columns.empty()) {
+        input_columns = {4, 5, 8, 10};
+    }
+    int output_column = config.value("output_column", 11);
+
+    // Determine required minimum columns from the data file
+    int max_col = output_column;
+    for (int col : input_columns) {
+        if (col > max_col) max_col = col;
+    }
+    int min_cols = max_col + 1;
+
     int max_iterations = config.value("max_iterations", 10);
     double target_r2 = config.value("target_r2", 0.8);
     int epochs = config.value("epochs", 1000);
@@ -114,9 +133,13 @@ void FFNManager::run(const nlohmann::json& config) {
     // Extract Input and Output columns
     std::vector<std::vector<double>> Input, Output;
     for (const auto& row : raw_data) {
-        if (row.size() >= 12) {
-            Input.push_back({row[4], row[5], row[8], row[10]});
-            Output.push_back({row[11]});
+        if (row.size() >= static_cast<size_t>(min_cols)) {
+            std::vector<double> in_row;
+            for (int col : input_columns) {
+                in_row.push_back(row[col]);
+            }
+            Input.push_back(in_row);
+            Output.push_back({row[output_column]});
         }
     }
 
@@ -452,7 +475,8 @@ void FFNManager::run(const nlohmann::json& config) {
 
             if (n < kk - 1) {
                 input = input_test.index({torch::indexing::Slice(), n + 1}).clone();
-                int update_idx = 5 * w - 5 - 1;
+                int dataset_row_size = static_cast<int>(input_columns.size()) + 1;
+                int update_idx = dataset_row_size * w - dataset_row_size - 1;
                 if (update_idx < num_features) {
                     input[update_idx] = prediction;
                 }
@@ -507,7 +531,8 @@ void FFNManager::run(const nlohmann::json& config) {
 
             if (n < kk - 1) {
                 input = input_test.index({torch::indexing::Slice(), n + 1}).clone();
-                int update_idx = 5 * w - 5 - 1;
+                int dataset_row_size = static_cast<int>(input_columns.size()) + 1;
+                int update_idx = dataset_row_size * w - dataset_row_size - 1;
                 if (update_idx < num_features) {
                     input[update_idx] = prediction;
                 }
