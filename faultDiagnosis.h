@@ -24,6 +24,7 @@ struct Conv1DNetImpl : torch::nn::Module {
     torch::nn::LayerNorm norm1{nullptr}, norm2{nullptr};
     torch::nn::Linear fc{nullptr};
     int64_t num_classes;
+    int64_t filter_size;
 
     Conv1DNetImpl(int64_t num_features, int64_t num_classes,
                   int64_t filter_size = 2, int64_t num_filters = 32);
@@ -203,7 +204,8 @@ public:
                    const std::vector<int64_t>& labels);
 
     // Predict on new sequences
-    std::vector<int64_t> predict(const std::vector<torch::Tensor>& sequences);
+    void predict(const std::vector<torch::Tensor>& sequences,
+                 std::vector<int64_t>& out_predictions);
 
     // Save/load model
     void save_model(const std::string& path);
@@ -345,11 +347,9 @@ void SequenceTrainer<ModelType>::train(const std::vector<torch::Tensor>& train_s
         for (size_t i = 0; i < train_sequences.size(); i += config.mini_batch_size) {
             size_t batch_end = std::min(i + config.mini_batch_size,
                                        train_sequences.size());
-
             // Prepare batch
             std::vector<torch::Tensor> batch_seqs;
             std::vector<int64_t> batch_labels;
-
             for (size_t j = i; j < batch_end; ++j) {
                 batch_seqs.push_back(norm_train_sequences[j]);
                 batch_labels.push_back(train_labels[j]);
@@ -360,7 +360,6 @@ void SequenceTrainer<ModelType>::train(const std::vector<torch::Tensor>& train_s
             for (const auto& seq : batch_seqs) {
                 max_len = std::max(max_len, seq.size(1));
             }
-
             std::vector<torch::Tensor> padded_seqs;
             for (const auto& seq : batch_seqs) {
                 int64_t pad_size = max_len - seq.size(1);
@@ -375,7 +374,6 @@ void SequenceTrainer<ModelType>::train(const std::vector<torch::Tensor>& train_s
             // Stack to batch tensor
             torch::Tensor batch_data = torch::stack(padded_seqs, 0);
             torch::Tensor batch_targets = torch::tensor(batch_labels);
-
             batch_data = batch_data.to(config.device);
             batch_targets = batch_targets.to(config.device);
 
@@ -438,7 +436,8 @@ double SequenceTrainer<ModelType>::evaluate(const std::vector<torch::Tensor>& se
     model->eval();
     torch::NoGradGuard no_grad;
 
-    auto predictions = predict(sequences);
+    std::vector<int64_t> predictions;
+    predict(sequences, predictions);
 
     int64_t correct = 0;
     for (size_t i = 0; i < predictions.size(); ++i) {
@@ -451,28 +450,25 @@ double SequenceTrainer<ModelType>::evaluate(const std::vector<torch::Tensor>& se
 }
 
 template<typename ModelType>
-std::vector<int64_t> SequenceTrainer<ModelType>::predict(const std::vector<torch::Tensor>& sequences) {
+void SequenceTrainer<ModelType>::predict(const std::vector<torch::Tensor>& sequences,
+                                          std::vector<int64_t>& out_predictions) {
     model->eval();
     torch::NoGradGuard no_grad;
 
-    // Normalize if enabled
-    std::vector<torch::Tensor> norm_sequences;
-    if (config.normalize_input) {
-        norm_sequences = normalizer.transform(sequences);
-    } else {
-        norm_sequences = sequences;
-    }
-
-    std::vector<int64_t> predictions;
-
-    for (const auto& seq : norm_sequences) {
+    out_predictions.clear();
+    out_predictions.reserve(sequences.size());
+    std::cout << "  predict: processing " << sequences.size() << " sequences" << std::endl;
+    for (size_t i = 0; i < sequences.size(); ++i) {
+        torch::Tensor seq = sequences[i];
+        if (config.normalize_input) {
+            seq = normalizer.transform({seq})[0];
+        }
         torch::Tensor input = seq.unsqueeze(0).to(config.device);
         torch::Tensor output = model->forward(input);
         int64_t pred = output.argmax(1).item<int64_t>();
-        predictions.push_back(pred);
+        out_predictions.push_back(pred);
     }
-
-    return predictions;
+    std::cout << "  predict: done, " << out_predictions.size() << " predictions" << std::endl;
 }
 
 template<typename ModelType>

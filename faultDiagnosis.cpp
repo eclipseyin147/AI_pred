@@ -17,25 +17,24 @@ namespace lifespanPred {
 // ============================================================================
 Conv1DNetImpl::Conv1DNetImpl(int64_t num_features, int64_t num_classes,
                              int64_t filter_size, int64_t num_filters)
-    : num_classes(num_classes) {
+    : num_classes(num_classes), filter_size(filter_size) {
 
     // Conv1d expects input shape: [batch, channels, sequence_length]
     // num_features is the number of channels (features per time step)
 
-    // First conv layer
-    // For "same" padding: padding = (kernel_size - 1) / 2
-    // This matches MATLAB's behavior for odd kernel sizes
-    // For even kernel sizes (like 2), output will be L-1 instead of L+1
+    // MATLAB-style "same" padding is applied manually in forward() because:
+    // PyTorch Conv1d only supports symmetric padding, but MATLAB uses asymmetric
+    // padding for even kernel sizes (more padding on the left).
     conv1 = register_module("conv1",
         torch::nn::Conv1d(torch::nn::Conv1dOptions(num_features, num_filters, filter_size)
-            .padding((filter_size - 1) / 2)));  // Correct "same" padding formula
+            .padding(0)));
 
     norm1 = register_module("norm1", torch::nn::LayerNorm(torch::nn::LayerNormOptions({num_filters})));
 
     // Second conv layer
     conv2 = register_module("conv2",
         torch::nn::Conv1d(torch::nn::Conv1dOptions(num_filters, num_filters, filter_size)
-            .padding((filter_size - 1) / 2)));  // Correct "same" padding formula
+            .padding(0)));
 
     norm2 = register_module("norm2", torch::nn::LayerNorm(torch::nn::LayerNormOptions({num_filters})));
 
@@ -46,7 +45,21 @@ Conv1DNetImpl::Conv1DNetImpl(int64_t num_features, int64_t num_classes,
 torch::Tensor Conv1DNetImpl::forward(torch::Tensor x) {
     // Input x shape: [batch, features, sequence_length]
 
+    // MATLAB-style "same" padding: pad left more than right for even kernel sizes
+    auto apply_same_padding = [&](torch::Tensor t) -> torch::Tensor {
+        int64_t pad_left = filter_size / 2;
+        int64_t pad_right = (filter_size - 1) / 2;
+        if (pad_left > 0 || pad_right > 0) {
+            t = torch::nn::functional::pad(t,
+                torch::nn::functional::PadFuncOptions({pad_left, pad_right})
+                    .mode(torch::kConstant)
+                    .value(0));
+        }
+        return t;
+    };
+
     // First conv block: Conv → ReLU → LayerNorm (matches MATLAB)
+    x = apply_same_padding(x);
     x = conv1->forward(x);
     x = torch::relu(x);
     x = x.permute({0, 2, 1}).contiguous();  // [batch, seq_len, filters] - ensure contiguous for CUDA
@@ -54,6 +67,7 @@ torch::Tensor Conv1DNetImpl::forward(torch::Tensor x) {
     x = x.permute({0, 2, 1}).contiguous();  // [batch, filters, seq_len] - ensure contiguous for CUDA
 
     // Second conv block: Conv → ReLU → LayerNorm (matches MATLAB)
+    x = apply_same_padding(x);
     x = conv2->forward(x);
     x = torch::relu(x);
     x = x.permute({0, 2, 1}).contiguous();  // [batch, seq_len, filters] - ensure contiguous for CUDA
@@ -304,20 +318,35 @@ std::vector<torch::Tensor> SequenceNormalizer::inverse_transform(const std::vect
 }
 
 void SequenceNormalizer::save(const std::string& filename) {
+    if (!fitted) {
+        return;
+    }
     torch::save({min_val, max_val, mean, std_dev}, filename);
 }
 
 void SequenceNormalizer::load(const std::string& filename) {
+    if (!std::filesystem::exists(filename)) {
+        fitted = false;
+        return;
+    }
     std::vector<torch::Tensor> tensors;
-    torch::load(tensors, filename);
+    try {
+        torch::load(tensors, filename);
+    } catch (...) {
+        fitted = false;
+        return;
+    }
     if (tensors.size() >= 4) {
         min_val = tensors[0];
         max_val = tensors[1];
         mean = tensors[2];
         std_dev = tensors[3];
-    } else {
+    } else if (tensors.size() >= 2) {
         min_val = tensors[0];
         max_val = tensors[1];
+    } else {
+        fitted = false;
+        return;
     }
     fitted = true;
 }
@@ -589,6 +618,13 @@ load_mat_data(const std::string& filename,
         }
     } else if (label_var->data_type == MAT_T_INT32 || label_var->data_type == MAT_T_UINT32) {
         int32_t *label_data = (int32_t *)label_var->data;
+        size_t num_labels = label_var->dims[0] * label_var->dims[1];
+
+        for (size_t i = 0; i < num_labels; ++i) {
+            labels.push_back(static_cast<int64_t>(label_data[i]) - 1);
+        }
+    } else if (label_var->data_type == MAT_T_UINT8 || label_var->data_type == MAT_T_INT8) {
+        int8_t *label_data = (int8_t *)label_var->data;
         size_t num_labels = label_var->dims[0] * label_var->dims[1];
 
         for (size_t i = 0; i < num_labels; ++i) {

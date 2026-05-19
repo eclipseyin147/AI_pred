@@ -1,5 +1,5 @@
 {
-  "mode": "ffn",
+  "mode": "faultdiag",
   "ffn": {
     "input_data_path": "Data_V13_40kW.txt",
     "output_model_path": "ffn_best_model.pt",
@@ -106,7 +106,7 @@
     "epochs": 100,
     "batch_size": 26,
     "optimizer": "adam",
-    "use_gpu": false,
+    "use_gpu": true,
     "data_var": "AXTrain3",
     "label_var": "AYTrain",
     "val_data_var": "AXTest3",
