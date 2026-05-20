@@ -1,5 +1,5 @@
 {
-  "mode": "ffn",
+  "mode": "faultdiag",
   "ffn": {
     "input_data_path": "Data_V13_40kW.txt",
     "output_model_path": "ffn_best_model.pt",
@@ -95,8 +95,8 @@
     "rr": 4.0
   },
   "faultdiag": {
-    "submode": "tcn",
-    "input_mat_path": "ALL_Traindata1.mat",
+    "submode": "cnn",
+    "input_mat_path": "Copy_of_select-model fault data.mat",
     "output_model_path": "fault_best_model.pt",
     "control_file_path": "control.json",
     "status_file_path": "status.json",
@@ -107,10 +107,10 @@
     "batch_size": 26,
     "optimizer": "adam",
     "use_gpu": false,
-    "data_var": "AXTrain3",
-    "label_var": "AYTrain",
-    "val_data_var": "AXTest3",
-    "val_label_var": "AYTest",
+    "data_var": "XTrain2",
+    "label_var": "YTrain2",
+    "val_data_var": "XText2",
+    "val_label_var": "YText2",
     "train_split": 0.8,
     "validation_frequency": 10,
     "normalization": {

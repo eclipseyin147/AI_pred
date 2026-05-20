@@ -16,12 +16,12 @@ void FaultDiagManager::run(const nlohmann::json& config) {
     std::cout << "=== Fault Diagnosis with LibTorch ===" << std::endl;
 
     // File paths must be explicitly configured in JSON (no hard-coded defaults)
-    if (!config.contains("input_mat_path")) {
-        std::cerr << "Error: config missing 'input_mat_path'" << std::endl;
+    if (!config.contains("input_mat_path") && !config.contains("data")) {
+        std::cerr << "Error: config missing 'input_mat_path' (flat) or 'data' (nested)" << std::endl;
         return;
     }
-    if (!config.contains("output_model_path")) {
-        std::cerr << "Error: config missing 'output_model_path'" << std::endl;
+    if (!config.contains("output_model_path") && !config.contains("output")) {
+        std::cerr << "Error: config missing 'output_model_path' (flat) or 'output' (nested)" << std::endl;
         return;
     }
     if (!config.contains("control_file_path")) {
@@ -33,36 +33,87 @@ void FaultDiagManager::run(const nlohmann::json& config) {
         return;
     }
 
-    std::string submode = config.value("submode", "tcn");
-    std::string mat_file = config["input_mat_path"];
-    std::string data_var = config.value("data_var", "XTrain");
-    std::string label_var = config.value("label_var", "YTrain");
-    std::string val_data_var = config.value("val_data_var", "");
-    std::string val_label_var = config.value("val_label_var", "");
-    double train_split = config.value("train_split", 0.8);
+    // Detect config format: nested (faultDiag_config_*.json) vs flat (unified_config.json faultdiag section)
+    bool is_nested = config.contains("data") && config.contains("training") && config.contains("model");
 
-    int epochs = config.value("epochs", 100);
-    int batch_size = config.value("batch_size", 26);
-    double learning_rate = config.value("learning_rate", 0.001);
-    int validation_frequency = config.value("validation_frequency", 10);
-    std::string optimizer = config.value("optimizer", "adam");
-    bool use_gpu = config.value("use_gpu", false);
-    std::string model_save_path = config["output_model_path"];
-    std::string control_file = config["control_file_path"];
-    std::string status_file = config["status_file_path"];
+    std::string submode;
+    std::string mat_file;
+    std::string data_var;
+    std::string label_var;
+    std::string val_data_var;
+    std::string val_label_var;
+    double train_split;
+    int epochs;
+    int batch_size;
+    double learning_rate;
+    int validation_frequency;
+    std::string optimizer;
+    bool use_gpu;
+    std::string model_save_path;
+    int cnn_filter_size;
+    int cnn_num_filters;
+    int tcn_num_blocks;
+    int tcn_num_filters;
+    int tcn_filter_size;
+    double tcn_dropout;
 
-    int cnn_filter_size = config.value("cnn_filter_size", 2);
-    int cnn_num_filters = config.value("cnn_num_filters", 32);
-    int tcn_num_blocks = config.value("tcn_num_blocks", 4);
-    int tcn_num_filters = config.value("tcn_num_filters", 64);
-    int tcn_filter_size = config.value("tcn_filter_size", 3);
-    double tcn_dropout = config.value("tcn_dropout", 0.005);
+    if (is_nested) {
+        // Nested format (matches faultDiagMain.cpp / faultDiag_config_*.json)
+        submode = config.value("mode", "tcn");
+        mat_file = config["data"]["mat_file"];
+        data_var = config["data"].value("data_var", "XTrain");
+        label_var = config["data"].value("label_var", "YTrain");
+        val_data_var = config["data"].value("val_data_var", "");
+        val_label_var = config["data"].value("val_label_var", "");
+        train_split = config["data"].value("train_split", 0.8);
 
-    // Normalization method for fault diagnosis
+        epochs = config["training"].value("epochs", 100);
+        batch_size = config["training"].value("batch_size", 26);
+        learning_rate = config["training"].value("learning_rate", 0.001);
+        validation_frequency = config["training"].value("validation_frequency", 10);
+        optimizer = config["training"].value("optimizer", "adam");
+        use_gpu = config["training"].value("use_gpu", false);
+
+        model_save_path = config["output"].value("model_save_path", "best_model.pt");
+
+        cnn_filter_size = config["model"]["cnn"].value("filter_size", 2);
+        cnn_num_filters = config["model"]["cnn"].value("num_filters", 32);
+        tcn_num_blocks = config["model"]["tcn"].value("num_blocks", 4);
+        tcn_num_filters = config["model"]["tcn"].value("num_filters", 64);
+        tcn_filter_size = config["model"]["tcn"].value("filter_size", 3);
+        tcn_dropout = config["model"]["tcn"].value("dropout", 0.005);
+    } else {
+        // Flat format (unified_config.json faultdiag section)
+        submode = config.value("submode", "tcn");
+        mat_file = config["input_mat_path"];
+        data_var = config.value("data_var", "XTrain");
+        label_var = config.value("label_var", "YTrain");
+        val_data_var = config.value("val_data_var", "");
+        val_label_var = config.value("val_label_var", "");
+        train_split = config.value("train_split", 0.8);
+
+        epochs = config.value("epochs", 100);
+        batch_size = config.value("batch_size", 26);
+        learning_rate = config.value("learning_rate", 0.001);
+        validation_frequency = config.value("validation_frequency", 10);
+        optimizer = config.value("optimizer", "adam");
+        use_gpu = config.value("use_gpu", false);
+        model_save_path = config["output_model_path"];
+
+        cnn_filter_size = config.value("cnn_filter_size", 2);
+        cnn_num_filters = config.value("cnn_num_filters", 32);
+        tcn_num_blocks = config.value("tcn_num_blocks", 4);
+        tcn_num_filters = config.value("tcn_num_filters", 64);
+        tcn_filter_size = config.value("tcn_filter_size", 3);
+        tcn_dropout = config.value("tcn_dropout", 0.005);
+    }
+
+    // Normalization settings: must respect explicit config, matching faultDiagMain.cpp behavior
+    bool normalize_input = true;  // Default aligns with faultDiagMain.cpp (both CNN/TCN use normalization)
     SequenceNormMethod norm_method = SequenceNormMethod::RESCALE_SYMMETRIC;
-    bool norm_enabled = true;
     if (config.contains("normalization")) {
-        norm_enabled = config["normalization"].value("enabled", true);
+        bool norm_enabled = config["normalization"].value("enabled", true);
+        normalize_input = norm_enabled;
         if (norm_enabled) {
             std::string method_str = config["normalization"].value("method", "rescale_symmetric");
             if (method_str == "minmax_0_1") norm_method = SequenceNormMethod::MINMAX_0_1;
@@ -72,6 +123,8 @@ void FaultDiagManager::run(const nlohmann::json& config) {
     }
 
     // Training controller
+    std::string control_file = config["control_file_path"];
+    std::string status_file = config["status_file_path"];
     TrainingController controller(control_file, status_file);
 
     // Device selection
@@ -114,7 +167,7 @@ void FaultDiagManager::run(const nlohmann::json& config) {
         cnn_config.validation_frequency = validation_frequency;
         cnn_config.optimizer_type = optimizer;
         cnn_config.device = device;
-        cnn_config.normalize_input = true;
+        cnn_config.normalize_input = normalize_input;
         cnn_config.normalization_method = norm_method;
         cnn_config.model_save_path = "cnn_test_model.pt";
         cnn_config.control_file_path = control_file;
@@ -135,7 +188,7 @@ void FaultDiagManager::run(const nlohmann::json& config) {
         tcn_config.validation_frequency = validation_frequency;
         tcn_config.optimizer_type = optimizer;
         tcn_config.device = device;
-        tcn_config.normalize_input = true;
+        tcn_config.normalize_input = normalize_input;
         tcn_config.normalization_method = norm_method;
         tcn_config.model_save_path = "tcn_test_model.pt";
         tcn_config.control_file_path = control_file;
@@ -150,7 +203,7 @@ void FaultDiagManager::run(const nlohmann::json& config) {
 
     // Check if MAT file is provided
     if (mat_file.empty()) {
-        std::cerr << "Error: input_mat_path is required for training modes" << std::endl;
+        std::cerr << "Error: input_mat_path / data.mat_file is required for training modes" << std::endl;
         return;
     }
 
@@ -222,7 +275,7 @@ void FaultDiagManager::run(const nlohmann::json& config) {
     train_config.validation_frequency = validation_frequency;
     train_config.device = device;
     train_config.optimizer_type = optimizer;
-    train_config.normalize_input = true;
+    train_config.normalize_input = normalize_input;
     train_config.normalization_method = norm_method;
     train_config.model_save_path = model_save_path;
     train_config.control_file_path = control_file;
