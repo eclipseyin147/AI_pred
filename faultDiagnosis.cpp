@@ -240,10 +240,14 @@ void SequenceNormalizer::fit(const std::vector<torch::Tensor>& sequences) {
         mean = concat_data.mean(1);  // [features]
         std_dev = concat_data.std(1, true);
         std_dev = torch::where(std_dev == 0, torch::ones_like(std_dev), std_dev);
+        min_val = torch::empty({0});
+        max_val = torch::empty({0});
     } else {
         // Min-max variants
-    min_val = std::get<0>(concat_data.min(1));  // [features]
-    max_val = std::get<0>(concat_data.max(1));  // [features]
+        min_val = std::get<0>(concat_data.min(1));  // [features]
+        max_val = std::get<0>(concat_data.max(1));  // [features]
+        mean = torch::empty({0});
+        std_dev = torch::empty({0});
     }
 
     fitted = true;
@@ -304,22 +308,33 @@ std::vector<torch::Tensor> SequenceNormalizer::inverse_transform(const std::vect
 }
 
 void SequenceNormalizer::save(const std::string& filename) {
-    torch::save({min_val, max_val, mean, std_dev}, filename);
+    try {
+        std::vector<torch::Tensor> tensors = {min_val, max_val, mean, std_dev};
+        torch::save(tensors, filename);
+    } catch (const std::exception& e) {
+        std::cerr << "[SequenceNormalizer] save failed: " << e.what() << std::endl;
+        throw;
+    }
 }
 
 void SequenceNormalizer::load(const std::string& filename) {
-    std::vector<torch::Tensor> tensors;
-    torch::load(tensors, filename);
-    if (tensors.size() >= 4) {
-        min_val = tensors[0];
-        max_val = tensors[1];
-        mean = tensors[2];
-        std_dev = tensors[3];
-    } else {
-    min_val = tensors[0];
-    max_val = tensors[1];
+    try {
+        std::vector<torch::Tensor> tensors;
+        torch::load(tensors, filename);
+        if (tensors.size() >= 4) {
+            min_val = tensors[0];
+            max_val = tensors[1];
+            mean = tensors[2];
+            std_dev = tensors[3];
+        } else if (tensors.size() >= 2) {
+            min_val = tensors[0];
+            max_val = tensors[1];
+        }
+        fitted = true;
+    } catch (const std::exception& e) {
+        std::cerr << "[SequenceNormalizer] load failed: " << e.what() << std::endl;
+        throw;
     }
-    fitted = true;
 }
 
 // ============================================================================

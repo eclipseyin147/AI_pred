@@ -12,6 +12,7 @@
 #include <iostream>
 #include <iomanip>
 #include <algorithm>
+#include <filesystem>
 #include <torch/nn/modules/dropout.h>
 #include "training_controller.h"
 namespace lifespanPred {
@@ -80,7 +81,10 @@ enum class SequenceNormMethod {
 class SequenceNormalizer {
 public:
     SequenceNormMethod method = SequenceNormMethod::RESCALE_SYMMETRIC;
-    torch::Tensor mean, std_dev, min_val, max_val;
+    torch::Tensor mean = torch::empty({0});
+    torch::Tensor std_dev = torch::empty({0});
+    torch::Tensor min_val = torch::empty({0});
+    torch::Tensor max_val = torch::empty({0});
     bool fitted = false;
 
     explicit SequenceNormalizer(SequenceNormMethod m = SequenceNormMethod::RESCALE_SYMMETRIC)
@@ -477,14 +481,60 @@ std::vector<int64_t> SequenceTrainer<ModelType>::predict(const std::vector<torch
 
 template<typename ModelType>
 void SequenceTrainer<ModelType>::save_model(const std::string& path) {
-    torch::save(model, path);
-    normalizer.save(path + ".normalizer");
+    try {
+        torch::save(model, path);
+    } catch (const std::exception& e) {
+        std::cerr << "[SequenceTrainer] Failed to save model to " << path
+                  << ": " << e.what() << std::endl;
+        throw;
+    }
+
+    // Only save normalizer if it was actually fitted (e.g., TCN uses normalization,
+    // CNN does not). Attempting to save undefined/empty tensors crashes LibTorch.
+    if (!normalizer.fitted) {
+        return;
+    }
+
+    try {
+        normalizer.save(path + ".normalizer");
+    } catch (const std::exception& e) {
+        std::cerr << "[SequenceTrainer] Failed to save normalizer to " << path
+                  << ".normalizer: " << e.what() << std::endl;
+        // Do not rethrow: the model itself was saved successfully.
+    }
 }
 
 template<typename ModelType>
 void SequenceTrainer<ModelType>::load_model(const std::string& path) {
-    torch::load(model, path);
-    normalizer.load(path + ".normalizer");
+    try {
+        torch::load(model, path);
+    } catch (const std::exception& e) {
+        std::cerr << "[SequenceTrainer] Failed to load model from " << path
+                  << ": " << e.what() << std::endl;
+        throw;
+    }
+
+    std::string norm_path = path + ".normalizer";
+    bool norm_exists = false;
+    try {
+        norm_exists = std::filesystem::exists(norm_path);
+    } catch (...) {
+        norm_exists = false;
+    }
+
+    if (!norm_exists) {
+        normalizer.fitted = false;
+        return;
+    }
+
+    try {
+        normalizer.load(norm_path);
+    } catch (const std::exception& e) {
+        std::cerr << "[SequenceTrainer] Failed to load normalizer from " << norm_path
+                  << ": " << e.what() << std::endl;
+        normalizer.fitted = false;
+        // Do not rethrow: the model itself was loaded successfully.
+    }
 }
 
 } // namespace lifespanPred
