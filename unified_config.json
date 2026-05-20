@@ -106,7 +106,7 @@
     "epochs": 100,
     "batch_size": 26,
     "optimizer": "adam",
-    "use_gpu": false,
+    "use_gpu": true,
     "data_var": "XTrain2",
     "label_var": "YTrain2",
     "val_data_var": "XText2",

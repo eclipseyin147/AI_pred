@@ -127,6 +127,21 @@ void FaultDiagManager::run(const nlohmann::json& config) {
     std::string status_file = config["status_file_path"];
     TrainingController controller(control_file, status_file);
 
+    // Limit threads for FaultDiag to avoid OpenBLAS "Bad memory unallocation" warnings.
+    // Small-batch sequence training does not benefit from high thread counts,
+    // and excessive OpenMP/BLAS threads cause TLS cache conflicts in OpenBLAS.
+    // NOTE: torch::set_num_interop_threads() must NOT be called here because
+    // unified_main.cpp already sets it once at startup, and calling it again
+    // after CUDA initialization causes a hard crash.
+    int fd_threads = 1;
+    const char* fd_env = std::getenv("FAULTDIAG_NUM_THREADS");
+    if (fd_env != nullptr) {
+        fd_threads = std::atoi(fd_env);
+    }
+    omp_set_num_threads(fd_threads);
+    torch::set_num_threads(fd_threads);
+    std::cout << "FaultDiag thread limit: " << fd_threads << std::endl;
+
     // Device selection
     torch::Device device(torch::kCPU);
     if (use_gpu && torch::cuda::is_available()) {
