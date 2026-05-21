@@ -296,6 +296,10 @@ void SEDMManager::run(const nlohmann::json& config) {
 
     // Load or train neural network
     std::cout << "\n=== Loading/Training Neural Network ===" << std::endl;
+    // FIX: LibTorch 2.7+ LBFGS is sensitive to random initialization.
+    // Use device-specific fixed seeds to ensure stable convergence.
+    int fixed_seed = device.is_cuda() ? 12345 : 42;
+    torch::manual_seed(fixed_seed);
     auto net = std::make_shared<FeedForwardNet>(num_features, hidden_neurons, 1);
     net->to(device);
 
@@ -313,86 +317,124 @@ void SEDMManager::run(const nlohmann::json& config) {
         torch::Tensor X_train = inputn.transpose(0, 1);
         torch::Tensor Y_train = outputn.unsqueeze(1);
 
-        net->train();
-        controller.update_status("sedm", "running", 0, epochs, 0.0, 0.0, 0.0, 0.0, "Training DDM model");
+        bool training_success = false;
+        bool user_stopped = false;
+        double last_loss = std::numeric_limits<double>::quiet_NaN();
 
-        if (optimizer_type == "lbfgs") {
-            auto lbfgs_config = config["optimizer"]["lbfgs"];
-            double lr = lbfgs_config.value("learning_rate", 1.0);
-            torch::optim::LBFGS optimizer(
-                net->parameters(),
-                torch::optim::LBFGSOptions(lr)
-                    .max_iter(lbfgs_config.value("max_iter", 20))
-                    .max_eval(lbfgs_config.value("max_eval", 25))
-                    .tolerance_grad(lbfgs_config.value("tolerance_grad", 1e-7))
-                    .tolerance_change(lbfgs_config.value("tolerance_change", 1e-9))
-                    .history_size(lbfgs_config.value("history_size", 100))
-            );
+        for (int seed = 42; seed < 52 && !training_success && !user_stopped; ++seed) {
+            if (seed > 42) {
+                std::cout << "Training diverged with seed " << (seed - 1)
+                          << ", retrying with seed " << seed << "..." << std::endl;
+            }
 
-            for (int epoch = 0; epoch < epochs; ++epoch) {
-                // Check control commands during training
-                std::string cmd = controller.read_command();
-                if (cmd == "pause") {
-                    controller.acknowledge_command();
-                    controller.update_status("sedm", "paused", epoch, epochs, 0.0, 0.0, 0.0, 0.0, "Paused by user");
-                    torch::save(net, checkpoint_model);
-                    nlohmann::json meta = {{"epoch", epoch}, {"best_r2", 0.0}};
-                    controller.save_checkpoint_meta(checkpoint_meta, meta);
-                    std::string resume_cmd = controller.wait_for_resume();
-                    if (resume_cmd == "stop") {
-                        controller.update_status("sedm", "stopped", epoch, epochs, 0.0, 0.0, 0.0, 0.0, "Stopped by user");
-                        return;
+            torch::manual_seed(seed);
+            net = std::make_shared<FeedForwardNet>(num_features, hidden_neurons, 1);
+            net->to(device);
+            net->train();
+            controller.update_status("sedm", "running", 0, epochs, 0.0, 0.0, 0.0, 0.0, "Training DDM model");
+
+            if (optimizer_type == "lbfgs") {
+                auto lbfgs_config = config["optimizer"]["lbfgs"];
+                double lr = lbfgs_config.value("learning_rate", 1.0);
+                torch::optim::LBFGS optimizer(
+                    net->parameters(),
+                    torch::optim::LBFGSOptions(lr)
+                        .max_iter(lbfgs_config.value("max_iter", 20))
+                        .max_eval(lbfgs_config.value("max_eval", 25))
+                        .tolerance_grad(lbfgs_config.value("tolerance_grad", 1e-7))
+                        .tolerance_change(lbfgs_config.value("tolerance_change", 1e-9))
+                        .history_size(lbfgs_config.value("history_size", 100))
+                );
+
+                last_loss = std::numeric_limits<double>::quiet_NaN();
+                for (int epoch = 0; epoch < epochs; ++epoch) {
+                    // Check control commands during training
+                    std::string cmd = controller.read_command();
+                    if (cmd == "pause") {
+                        controller.acknowledge_command();
+                        controller.update_status("sedm", "paused", epoch, epochs, 0.0, 0.0, 0.0, 0.0, "Paused by user");
+                        torch::save(net, checkpoint_model);
+                        nlohmann::json meta = {{"epoch", epoch}, {"best_r2", 0.0}};
+                        controller.save_checkpoint_meta(checkpoint_meta, meta);
+                        std::string resume_cmd = controller.wait_for_resume();
+                        if (resume_cmd == "stop") {
+                            controller.update_status("sedm", "stopped", epoch, epochs, 0.0, 0.0, 0.0, 0.0, "Stopped by user");
+                            user_stopped = true;
+                            break;
+                        }
+                        if (resume_cmd == "restart") {
+                            controller.clear_checkpoint(checkpoint_meta, checkpoint_model);
+                            controller.update_status("sedm", "running", 0, epochs, 0.0, 0.0, 0.0, 0.0, "Restarting");
+                            epoch = -1;
+                            continue;
+                        }
+                        controller.update_status("sedm", "running", epoch, epochs, 0.0, 0.0, 0.0, 0.0, "Resumed");
                     }
-                    if (resume_cmd == "restart") {
+                    if (cmd == "stop") {
+                        controller.acknowledge_command();
+                        torch::save(net, checkpoint_model);
+                        nlohmann::json meta = {{"epoch", epoch}, {"best_r2", 0.0}};
+                        controller.save_checkpoint_meta(checkpoint_meta, meta);
+                        controller.update_status("sedm", "stopped", epoch, epochs, 0.0, 0.0, 0.0, 0.0, "Stopped by user");
+                        user_stopped = true;
+                        break;
+                    }
+                    if (cmd == "restart") {
+                        controller.acknowledge_command();
                         controller.clear_checkpoint(checkpoint_meta, checkpoint_model);
                         controller.update_status("sedm", "running", 0, epochs, 0.0, 0.0, 0.0, 0.0, "Restarting");
                         epoch = -1;
                         continue;
                     }
-                    controller.update_status("sedm", "running", epoch, epochs, 0.0, 0.0, 0.0, 0.0, "Resumed");
-                }
-                if (cmd == "stop") {
-                    controller.acknowledge_command();
-                    torch::save(net, checkpoint_model);
-                    nlohmann::json meta = {{"epoch", epoch}, {"best_r2", 0.0}};
-                    controller.save_checkpoint_meta(checkpoint_meta, meta);
-                    controller.update_status("sedm", "stopped", epoch, epochs, 0.0, 0.0, 0.0, 0.0, "Stopped by user");
-                    return;
-                }
-                if (cmd == "restart") {
-                    controller.acknowledge_command();
-                    controller.clear_checkpoint(checkpoint_meta, checkpoint_model);
-                    controller.update_status("sedm", "running", 0, epochs, 0.0, 0.0, 0.0, 0.0, "Restarting");
-                    epoch = -1;
-                    continue;
+
+                    auto closure = [&]() -> torch::Tensor {
+                        optimizer.zero_grad();
+                        torch::Tensor output = net->forward(X_train);
+                        torch::Tensor loss = torch::mse_loss(output, Y_train);
+                        loss.backward();
+                        return loss;
+                    };
+
+                    torch::Tensor loss = optimizer.step(closure);
+                    last_loss = loss.item<double>();
+
+                    if (std::isnan(last_loss) || std::isinf(last_loss)) {
+                        std::cout << "Diverged at epoch " << (epoch + 1) << " (loss=" << last_loss << "), aborting retry..." << std::endl;
+                        break;
+                    }
+
+                    if ((epoch + 1) % 100 == 0) {
+                        std::cout << "Epoch " << (epoch + 1) << ", Loss: " << last_loss << std::endl;
+                    }
+                    if (last_loss < goal_loss) {
+                        std::cout << "Converged at epoch " << (epoch + 1) << std::endl;
+                        break;
+                    }
+
+                    if ((epoch + 1) % 100 == 0) {
+                        controller.update_status("sedm", "running", epoch + 1, epochs,
+                                                 last_loss, 0.0, 0.0, 0.0,
+                                                 "Training DDM");
+                    }
                 }
 
-                auto closure = [&]() -> torch::Tensor {
-                    optimizer.zero_grad();
-                    torch::Tensor output = net->forward(X_train);
-                    torch::Tensor loss = torch::mse_loss(output, Y_train);
-                    loss.backward();
-                    return loss;
-                };
-
-                torch::Tensor loss = optimizer.step(closure);
-
-                if ((epoch + 1) % 100 == 0) {
-                    std::cout << "Epoch " << (epoch + 1) << ", Loss: " << loss.item<double>() << std::endl;
+                if (!user_stopped && !std::isnan(last_loss) && !std::isinf(last_loss)) {
+                    training_success = true;
                 }
-                if (loss.item<double>() < goal_loss) {
-                    std::cout << "Converged at epoch " << (epoch + 1) << std::endl;
-                    break;
-                }
-
-                if ((epoch + 1) % 100 == 0) {
-                    controller.update_status("sedm", "running", epoch + 1, epochs,
-                                             loss.item<double>(), 0.0, 0.0, 0.0,
-                                             "Training DDM");
-                }
+            } else {
+                std::cerr << "SEDM fallback training only supports LBFGS currently." << std::endl;
+                break;
             }
-        } else {
-            std::cerr << "SEDM fallback training only supports LBFGS currently." << std::endl;
+        }
+
+        if (user_stopped) {
+            return;
+        }
+
+        if (!training_success) {
+            std::cerr << "Error: Training failed after multiple retries. All seeds produced NaN/Inf." << std::endl;
+            controller.update_status("sedm", "stopped", 0, epochs, 0.0, 0.0, 0.0, 0.0, "Training failed - NaN");
+            return;
         }
 
         torch::save(net, model_path);

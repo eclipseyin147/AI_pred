@@ -1,5 +1,5 @@
 {
-  "mode": "faultdiag",
+  "mode": "sedm",
   "ffn": {
     "input_data_path": "Data_V13_40kW.txt",
     "output_model_path": "ffn_best_model.pt",
