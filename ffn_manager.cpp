@@ -183,7 +183,6 @@ void FFNManager::run(const nlohmann::json& config) {
     torch::Tensor input_train = torch::zeros({num_features, train_limit});
     torch::Tensor output_train = torch::zeros({train_limit});
 
-    #pragma omp parallel for
     for (int i = 0; i < train_limit; ++i) {
         for (int j = 0; j < num_features; ++j) {
             input_train[j][i] = input_data_rows[i][j];
@@ -194,7 +193,6 @@ void FFNManager::run(const nlohmann::json& config) {
     torch::Tensor input_test = torch::zeros({num_features, num_test});
     torch::Tensor output_test = torch::zeros({num_test});
 
-    #pragma omp parallel for
     for (int i = 0; i < num_test; ++i) {
         for (int j = 0; j < num_features; ++j) {
             input_test[j][i] = input_data_rows[train_limit + i][j];

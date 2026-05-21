@@ -259,7 +259,6 @@ void SEDMManager::run(const nlohmann::json& config) {
     torch::Tensor output_train = torch::zeros({numTimeStepsTrain});
 
     int train_limit = std::min(numTimeStepsTrain, num_samples);
-    #pragma omp parallel for
     for (int i = 0; i < train_limit; ++i) {
         for (int j = 0; j < num_features; ++j) {
             input_train[j][i] = input_data_rows[i][j];
@@ -270,7 +269,6 @@ void SEDMManager::run(const nlohmann::json& config) {
     torch::Tensor input_test = torch::zeros({num_features, num_test});
     torch::Tensor output_test = torch::zeros({num_test});
 
-    #pragma omp parallel for
     for (int i = 0; i < num_test; ++i) {
         for (int j = 0; j < num_features; ++j) {
             input_test[j][i] = input_data_rows[numTimeStepsTrain + i][j];
