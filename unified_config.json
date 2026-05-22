@@ -11,17 +11,17 @@
     "hidden_layers": 2,
     "hidden_layer_neurons": [50, 50],
     "learning_rate": 1.0,
-    "epochs": 5000,
-    "batch_size": 32,
-    "optimizer_type": "adamw",
+    "epochs": 40,
+    "batch_size": 60000,
+    "optimizer_type": "lbfgs",
     "optimizer": {
       "lbfgs": {
-        "learning_rate": 1.0,
-        "max_iter": 20,
-        "max_eval": 25,
-        "tolerance_grad": 1e-7,
-        "tolerance_change": 1e-9,
-        "history_size": 100
+        "learning_rate": 0.005,
+        "max_iter": 200,
+        "max_eval": 1200,
+        "tolerance_grad": 1e-12,
+        "tolerance_change": 1e-15,
+        "history_size": 30
       },
       "adamw": {
         "learning_rate": 0.001,
@@ -35,10 +35,10 @@
       "enabled": true,
       "method": "minmax_neg1_1"
     },
-    "goal_loss": 1e-6,
+    "goal_loss": 1e-9,
     "max_iterations": 1000,
-    "target_r2": 0.9,
-    "print_interval": 200,
+    "target_r2": 0.85,
+    "print_interval": 10,
     "window_size": 5,
     "train_samples": 300,
     "num_rows": 900,

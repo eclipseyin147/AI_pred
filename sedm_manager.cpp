@@ -148,6 +148,8 @@ namespace tju_torch {
         int max_iterations = config.value("max_iterations", 1000);
         double target_r2 = config.value("target_r2", 0.85);
         int print_interval = config.value("print_interval", 100);
+        int batch_size = config.value("batch_size", 32);
+        if (batch_size <= 0) batch_size = 32;
 
         std::string optimizer_type = config.value("optimizer_type", "lbfgs");
 
@@ -363,6 +365,7 @@ namespace tju_torch {
 
             torch::Tensor X_train = inputn.transpose(0, 1);
             torch::Tensor Y_train = outputn.unsqueeze(1);
+            int num_train_samples = static_cast<int>(X_train.size(0));
 
             net->train();
 
@@ -379,12 +382,18 @@ namespace tju_torch {
                 auto lbfgs_config = config["optimizer"]["lbfgs"];
                 double lr = lbfgs_config.value("learning_rate", 1.0);
 
-                int seed_start = 42;
+                if (batch_size < num_train_samples) {
+                    std::cout << "Note: LBFGS uses full-batch training. Configured batch_size ("
+                              << batch_size << ") is ignored for LBFGS." << std::endl;
+                }
+
+                int base_seed = 42 + pp * 10;
+                int seed_start = base_seed;
                 if (has_checkpoint && pp == start_iteration && saved_seed > 0) {
                     seed_start = saved_seed;
                 }
 
-                for (int seed = seed_start; seed < 52 && !training_success && !user_stopped; ++seed) {
+                for (int seed = seed_start; seed < base_seed + 10 && !training_success && !user_stopped; ++seed) {
                     if (seed > seed_start) {
                         std::cout << "Training diverged with seed " << (seed - 1)
                                 << ", retrying with seed " << seed << "..." << std::endl;
@@ -485,7 +494,7 @@ namespace tju_torch {
                             torch::Tensor output = net->forward(X_train);
                             torch::Tensor loss = torch::mse_loss(output, Y_train);
                             loss.backward();
-                            torch::nn::utils::clip_grad_norm_(net->parameters(), 1.0);
+                            //torch::nn::utils::clip_grad_norm_(net->parameters(), 10.0);
                             return loss;
                         };
 
@@ -607,14 +616,27 @@ namespace tju_torch {
                         break;
                     }
 
-                    optimizer.zero_grad();
-                    torch::Tensor output = net->forward(X_train);
-                    torch::Tensor loss = torch::mse_loss(output, Y_train);
-                    loss.backward();
-                    torch::nn::utils::clip_grad_norm_(net->parameters(), 1.0);
-                    optimizer.step();
+                    double epoch_loss = 0.0;
+                    int effective_batch_size = std::min(batch_size, num_train_samples);
+                    int num_batches = (num_train_samples + effective_batch_size - 1) / effective_batch_size;
 
-                    double loss_val = loss.item<double>();
+                    for (int b = 0; b < num_batches; ++b) {
+                        int start = b * effective_batch_size;
+                        int end = std::min(start + effective_batch_size, num_train_samples);
+                        auto X_batch = X_train.slice(0, start, end);
+                        auto Y_batch = Y_train.slice(0, start, end);
+
+                        optimizer.zero_grad();
+                        torch::Tensor output = net->forward(X_batch);
+                        torch::Tensor loss = torch::mse_loss(output, Y_batch);
+                        loss.backward();
+                        torch::nn::utils::clip_grad_norm_(net->parameters(), 1.0);
+                        optimizer.step();
+
+                        epoch_loss += loss.item<double>() * (end - start);
+                    }
+
+                    double loss_val = epoch_loss / num_train_samples;
 
                     train_log << (pp + 1) << "," << (epoch + 1) << ","
                             << loss_val << "," << lr << ",adamw,0,0,0\n";
