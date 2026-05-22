@@ -5,9 +5,13 @@
 
 namespace tju_torch {
 
-class SEDMManager {
+class BatteryLifespanManager {
 public:
     void run(const nlohmann::json& config);
+
+private:
+    void runTrain(const nlohmann::json& config);
+    void runPredict(const nlohmann::json& config);
 };
 
 } // namespace tju_torch

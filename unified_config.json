@@ -1,68 +1,11 @@
 {
-  "mode": "sedm",
-  "ffn": {
+  "mode": "battery_lifespan",
+  "battery_lifespan": {
+    "submode": "train",
     "input_data_path": "Data_V13_40kW.txt",
-    "output_model_path": "ffn_best_model.pt",
-    "output_predictions_path": "predictions.csv",
-    "output_training_log_path": "training_log.csv",
-    "control_file_path": "control.json",
-    "status_file_path": "status.json",
-    "input_columns": [4, 5, 8, 10],
-    "output_column": 11,
-    "hidden_layers": 2,
-    "hidden_layer_neurons": [50, 50],
-    "learning_rate": 0.001,
-    "epochs": 15000,
-    "batch_size": 32,
-    "optimizer_type": "adamw",
-    "optimizer": {
-      "lbfgs": {
-        "learning_rate": 1.0,
-        "max_iter": 20,
-        "max_eval": 25,
-        "tolerance_grad": 1e-7,
-        "tolerance_change": 1e-9,
-        "history_size": 100
-      },
-      "rmsprop": {
-        "learning_rate": 0.01,
-        "alpha": 0.99,
-        "eps": 1e-8,
-        "weight_decay": 0.0,
-        "momentum": 0.0,
-        "centered": false
-      },
-      "adam": {
-        "learning_rate": 0.001,
-        "beta1": 0.9,
-        "beta2": 0.999,
-        "eps": 1e-8,
-        "weight_decay": 0.0
-      },
-      "adamw": {
-        "learning_rate": 0.001,
-        "beta1": 0.9,
-        "beta2": 0.999,
-        "eps": 1e-10,
-        "weight_decay": 0.001
-      }
-    },
-    "normalization": {
-      "enabled": true,
-      "method": "minmax_neg1_1"
-    },
-    "goal_loss": 2e-5,
-    "max_iterations": 1000,
-    "target_r2": 0.85,
-    "print_interval": 200,
-    "window_size": 5,
-    "train_samples": 300,
-    "num_rows": 900
-  },
-  "sedm": {
-    "input_data_path": "Data_V13_40kW.txt",
-    "model_path": "sedm_best_model.pt",
-    "output_predictions_path": "hybrid_predictions.csv",
+    "model_path": "battery_best_model.pt",
+    "output_predictions_path": "battery_predictions.csv",
+    "output_training_log_path": "battery_training_log.csv",
     "control_file_path": "control.json",
     "status_file_path": "status.json",
     "hidden_layers": 2,
@@ -79,6 +22,13 @@
         "tolerance_grad": 1e-7,
         "tolerance_change": 1e-9,
         "history_size": 100
+      },
+      "adamw": {
+        "learning_rate": 0.001,
+        "beta1": 0.9,
+        "beta2": 0.999,
+        "eps": 1e-8,
+        "weight_decay": 0.001
       }
     },
     "normalization": {
@@ -86,13 +36,16 @@
       "method": "minmax_neg1_1"
     },
     "goal_loss": 1e-10,
-    "input_columns": [4, 5, 8, 10],
-    "output_column": 11,
-    "time_column": 0,
+    "max_iterations": 1000,
+    "target_r2": 0.85,
+    "print_interval": 200,
     "window_size": 5,
     "train_samples": 300,
     "num_rows": 900,
-    "rr": 4.0
+    "rr": 4.0,
+    "input_columns": [4, 5, 8, 10],
+    "output_column": 11,
+    "time_column": 0
   },
   "faultdiag": {
     "submode": "cnn",

@@ -6,7 +6,6 @@
 #include <torch/torch.h>
 #include <nlohmann/json.hpp>
 
-#include "ffn_manager.h"
 #include "sedm_manager.h"
 #include "faultdiag_manager.h"
 
@@ -15,7 +14,8 @@ using json = nlohmann::json;
 void print_usage(const char* program_name) {
     std::cout << "Usage: " << program_name << " [config_file.json]\n\n";
     std::cout << "Unified executable for TJU-Torch project.\n";
-    std::cout << "Modes: ffn, sedm, faultdiag (set in config file)\n\n";
+    std::cout << "Modes: battery_lifespan, faultdiag (set in config file)\n";
+    std::cout << "  battery_lifespan submodes: train, predict\n\n";
     std::cout << "If no config file is provided, 'unified_config.json' will be used.\n";
     std::cout << std::endl;
 }
@@ -27,46 +27,60 @@ json load_config(const std::string& config_file) {
         std::cerr << "Using default configuration." << std::endl;
 
         return json{
-            {"mode", "ffn"},
-            {"ffn", {
+            {"mode", "battery_lifespan"},
+            {"battery_lifespan", {
+                {"submode", "train"},
                 {"input_data_path", "Data_V13_40kW.txt"},
-                {"output_model_path", "ffn_best_model.pt"},
-                {"output_predictions_path", "predictions.csv"},
-                {"output_training_log_path", "training_log.csv"},
-                {"hidden_layers", 2},
-                {"hidden_layer_neurons", {50, 50}},
-                {"learning_rate", 0.001},
-                {"epochs", 15000},
-                {"batch_size", 32},
-                {"optimizer_type", "adamw"},
-                {"goal_loss", 2e-5},
-                {"max_iterations", 1000},
-                {"target_r2", 0.85},
-                {"print_interval", 200},
-                {"window_size", 5},
-                {"train_samples", 300},
-                {"num_rows", 900}
-            }},
-            {"sedm", {
-                {"input_data_path", "Data_V13_40kW.txt"},
-                {"model_path", "sedm_best_model.pt"},
-                {"output_predictions_path", "hybrid_predictions.csv"},
+                {"model_path", "battery_best_model.pt"},
+                {"output_predictions_path", "battery_predictions.csv"},
+                {"output_training_log_path", "battery_training_log.csv"},
+                {"control_file_path", "control.json"},
+                {"status_file_path", "status.json"},
                 {"hidden_layers", 2},
                 {"hidden_layer_neurons", {50, 50}},
                 {"learning_rate", 1.0},
                 {"epochs", 1000},
                 {"batch_size", 32},
                 {"optimizer_type", "lbfgs"},
+                {"optimizer", {
+                    {"lbfgs", {
+                        {"learning_rate", 1.0},
+                        {"max_iter", 20},
+                        {"max_eval", 25},
+                        {"tolerance_grad", 1e-7},
+                        {"tolerance_change", 1e-9},
+                        {"history_size", 100}
+                    }},
+                    {"adamw", {
+                        {"learning_rate", 0.001},
+                        {"beta1", 0.9},
+                        {"beta2", 0.999},
+                        {"eps", 1e-8},
+                        {"weight_decay", 0.001}
+                    }}
+                }},
+                {"normalization", {
+                    {"enabled", true},
+                    {"method", "minmax_neg1_1"}
+                }},
                 {"goal_loss", 1e-10},
+                {"max_iterations", 1000},
+                {"target_r2", 0.85},
+                {"print_interval", 200},
                 {"window_size", 5},
                 {"train_samples", 300},
                 {"num_rows", 900},
-                {"rr", 4.0}
+                {"rr", 4.0},
+                {"input_columns", {4, 5, 8, 10}},
+                {"output_column", 11},
+                {"time_column", 0}
             }},
             {"faultdiag", {
                 {"submode", "tcn"},
                 {"input_mat_path", "ALL_Traindata1.mat"},
                 {"output_model_path", "fault_best_model.pt"},
+                {"control_file_path", "control.json"},
+                {"status_file_path", "status.json"},
                 {"hidden_layers", 2},
                 {"hidden_layer_neurons", {64, 48}},
                 {"learning_rate", 0.001},
@@ -80,6 +94,10 @@ json load_config(const std::string& config_file) {
                 {"val_label_var", "AYTest"},
                 {"train_split", 0.8},
                 {"validation_frequency", 10},
+                {"normalization", {
+                    {"enabled", true},
+                    {"method", "rescale_symmetric"}
+                }},
                 {"cnn_filter_size", 2},
                 {"cnn_num_filters", 32},
                 {"tcn_num_blocks", 4},
@@ -112,7 +130,7 @@ int main(int argc, char* argv[]) {
     std::cout << "Loading configuration from: " << config_file << std::endl;
     json config = load_config(config_file);
 
-    std::string mode = config.value("mode", "ffn");
+    std::string mode = config.value("mode", "battery_lifespan");
     std::cout << "\nRunning mode: " << mode << std::endl;
 
     // Set OpenMP threads
@@ -130,20 +148,15 @@ int main(int argc, char* argv[]) {
     std::cout << "PyTorch configured to use " << num_threads << " threads." << std::endl;
 
     // Dispatch to appropriate manager
-    if (mode == "ffn") {
-        if (!config.contains("ffn")) {
-            std::cerr << "Error: Config missing 'ffn' section." << std::endl;
+    if (mode == "battery_lifespan") {
+        if (!config.contains("battery_lifespan")) {
+            std::cerr << "Error: Config missing 'battery_lifespan' section." << std::endl;
             return 1;
         }
-        tju_torch::FFNManager manager;
-        manager.run(config["ffn"]);
-    } else if (mode == "sedm") {
-        if (!config.contains("sedm")) {
-            std::cerr << "Error: Config missing 'sedm' section." << std::endl;
-            return 1;
-        }
-        tju_torch::SEDMManager manager;
-        manager.run(config["sedm"]);
+        std::string submode = config["battery_lifespan"].value("submode", "predict");
+        std::cout << "Battery lifespan submode: " << submode << std::endl;
+        tju_torch::BatteryLifespanManager manager;
+        manager.run(config["battery_lifespan"]);
     } else if (mode == "faultdiag") {
         if (!config.contains("faultdiag")) {
             std::cerr << "Error: Config missing 'faultdiag' section." << std::endl;
@@ -153,7 +166,7 @@ int main(int argc, char* argv[]) {
         manager.run(config["faultdiag"]);
     } else {
         std::cerr << "Error: Unknown mode '" << mode << "'" << std::endl;
-        std::cerr << "Valid modes: 'ffn', 'sedm', 'faultdiag'" << std::endl;
+        std::cerr << "Valid modes: 'battery_lifespan', 'faultdiag'" << std::endl;
         return 1;
     }
 

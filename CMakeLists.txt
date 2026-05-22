@@ -26,10 +26,9 @@ if(NOT matio_FOUND)
     endif()
 endif()
 
-# Unified executable replacing FFNPredictor, SEDM, and faultDiag
+# Unified executable: battery_lifespan (train/predict) and faultdiag
 add_executable(tju-torch
     unified_main.cpp
-    ffn_manager.cpp
     sedm_manager.cpp
     faultdiag_manager.cpp
     faultDiagnosis.cpp
