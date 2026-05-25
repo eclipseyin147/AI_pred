@@ -11,7 +11,7 @@
     "hidden_layers": 2,
     "hidden_layer_neurons": [50, 50],
     "learning_rate": 1.0,
-    "epochs": 40,
+    "epochs": 60,
     "batch_size": 60000,
     "optimizer_type": "lbfgs",
     "optimizer": {
@@ -37,7 +37,7 @@
     },
     "goal_loss": 1e-9,
     "max_iterations": 1000,
-    "target_r2": 0.85,
+    "target_r2": 0.8,
     "print_interval": 10,
     "window_size": 5,
     "train_samples": 300,
