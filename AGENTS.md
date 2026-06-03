@@ -198,8 +198,9 @@ The unified executable uses a single JSON configuration file. The top-level `mod
     "target_r2": 0.85,
     "print_interval": 200,
     "window_size": 5,
-    "train_samples": 300,
-    "num_rows": 900,
+    "training_sample_ratio": 0.5,
+    "num_rows_begin": 0,
+    "num_rows_end": 900,
     "rr": 4.0,
     "input_columns": [4, 5, 8, 10],
     "output_column": 11,
@@ -255,6 +256,11 @@ For `battery_lifespan` mode, the input features and output target are selected b
 | `input_columns` | `int[]` | `battery_lifespan` | 0-based column indices to use as neural-network input features |
 | `output_column` | `int` | `battery_lifespan` | 0-based column index to use as the prediction target |
 | `time_column` | `int` | `battery_lifespan` | 0-based column index for the time variable used by the SEDM physics model |
+
+| `num_rows_end` | `int` | `battery_lifespan` | Ending row index (exclusive) to read from the text data file. Use `-1` or omit to read until end. |
+| `time_begin` | `double` | `battery_lifespan` | Starting time offset (in hours) written by the GUI. When calculating EOL, this value is subtracted from the absolute time to obtain the real lifetime. Default is `0.0`. |
+
+> **Backward compatibility**: The legacy `num_rows` field is still supported. If `num_rows_begin`/`num_rows_end` are not present but `num_rows` is, the behavior defaults to `num_rows_begin=0` and `num_rows_end=num_rows`.
 
 If these fields are omitted, the defaults match the original hard-coded behavior:
 - `input_columns`: `[4, 5, 8, 10]`

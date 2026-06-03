@@ -49,9 +49,15 @@ void FFNManager::run(const nlohmann::json& config) {
     std::string control_file = config["control_file_path"];
     std::string status_file = config["status_file_path"];
 
-    int num_rows = config.value("num_rows", 900);
+    int num_rows_begin = 0;
+    int num_rows_end = -1;
+    if (config.contains("num_rows_begin") || config.contains("num_rows_end")) {
+        num_rows_begin = config.value("num_rows_begin", 0);
+        num_rows_end = config.value("num_rows_end", -1);
+    } else if (config.contains("num_rows")) {
+        num_rows_end = config.value("num_rows", 900);
+    }
     int window_size = config.value("window_size", 5);
-    int numTimeStepsTrain = config.value("train_samples", 300);
 
     // Read column configuration for input/output selection
     std::vector<int> input_columns;
@@ -119,7 +125,7 @@ void FFNManager::run(const nlohmann::json& config) {
 
     // Load data
     std::cout << "\nLoading data from " << data_file << "..." << std::endl;
-    auto raw_data = readDataFile(data_file, num_rows);
+    auto raw_data = readDataFile(data_file, num_rows_begin, num_rows_end);
     if (raw_data.empty()) {
         std::cerr << "Error: No data loaded!" << std::endl;
         controller.update_status("ffn", "stopped", 0, epochs, 0.0, 0.0, 0.0, 0.0, "Data load failed");
@@ -176,6 +182,16 @@ void FFNManager::run(const nlohmann::json& config) {
 
     int num_samples = static_cast<int>(input_data_rows.size());
     int num_features = static_cast<int>(input_data_rows[0].size());
+
+    int numTimeStepsTrain = 300;
+    if (config.contains("training_sample_ratio")) {
+        double ratio = config.value("training_sample_ratio", 0.5);
+        numTimeStepsTrain = static_cast<int>(std::round(ratio * num_samples));
+    } else if (config.contains("train_samples")) {
+        numTimeStepsTrain = config.value("train_samples", 300);
+    }
+    if (numTimeStepsTrain <= 0) numTimeStepsTrain = 1;
+    if (numTimeStepsTrain > num_samples) numTimeStepsTrain = num_samples;
 
     int train_limit = std::min(numTimeStepsTrain, num_samples);
     int num_test = num_samples - train_limit;

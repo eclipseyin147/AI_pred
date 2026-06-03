@@ -140,9 +140,15 @@ namespace tju_torch {
         std::string control_file = config["control_file_path"];
         std::string status_file = config["status_file_path"];
 
-        int num_rows = config.value("num_rows", 900);
+        int num_rows_begin = 0;
+        int num_rows_end = -1;
+        if (config.contains("num_rows_begin") || config.contains("num_rows_end")) {
+            num_rows_begin = config.value("num_rows_begin", 0);
+            num_rows_end = config.value("num_rows_end", -1);
+        } else if (config.contains("num_rows")) {
+            num_rows_end = config.value("num_rows", 900);
+        }
         int window_size = config.value("window_size", 5);
-        int numTimeStepsTrain = config.value("train_samples", 300);
         int epochs = config.value("epochs", 1000);
         double goal_loss = config.value("goal_loss", 1e-10);
         int max_iterations = config.value("max_iterations", 1000);
@@ -210,7 +216,7 @@ namespace tju_torch {
 
         // Load data
         std::cout << "\nLoading data from " << data_file << "..." << std::endl;
-        auto raw_data = readDataFile(data_file, num_rows);
+        auto raw_data = readDataFile(data_file, num_rows_begin, num_rows_end);
         if (raw_data.empty()) {
             std::cerr << "Error: No data loaded!" << std::endl;
             controller.update_status("battery_lifespan", "stopped", 0, epochs, 0.0, 0.0, 0.0, 0.0, "Data load failed");
@@ -266,6 +272,17 @@ namespace tju_torch {
 
         int num_samples = static_cast<int>(input_data_rows.size());
         int num_features = static_cast<int>(input_data_rows[0].size());
+
+        int numTimeStepsTrain = 300;
+        if (config.contains("training_sample_ratio")) {
+            double ratio = config.value("training_sample_ratio", 0.5);
+            numTimeStepsTrain = static_cast<int>(std::round(ratio * num_samples));
+        } else if (config.contains("train_samples")) {
+            numTimeStepsTrain = config.value("train_samples", 300);
+        }
+        if (numTimeStepsTrain <= 0) numTimeStepsTrain = 1;
+        if (numTimeStepsTrain > num_samples) numTimeStepsTrain = num_samples;
+
         int num_test = num_samples - numTimeStepsTrain;
 
         torch::Tensor input_train = torch::zeros({num_features, numTimeStepsTrain});
@@ -838,10 +855,17 @@ namespace tju_torch {
         std::string control_file = config["control_file_path"];
         std::string status_file = config["status_file_path"];
 
-        int num_rows = config.value("num_rows", 900);
+        int num_rows_begin = 0;
+        int num_rows_end = -1;
+        if (config.contains("num_rows_begin") || config.contains("num_rows_end")) {
+            num_rows_begin = config.value("num_rows_begin", 0);
+            num_rows_end = config.value("num_rows_end", -1);
+        } else if (config.contains("num_rows")) {
+            num_rows_end = config.value("num_rows", 900);
+        }
         int window_size = config.value("window_size", 5);
-        int numTimeStepsTrain = config.value("train_samples", 300);
         double RR = config.value("rr", 4.0);
+        double time_begin = config.value("time_begin", 0.0);
 
         // Column configuration
         std::vector<int> input_columns;
@@ -896,7 +920,7 @@ namespace tju_torch {
 
         // Load data
         std::cout << "\nLoading data from " << data_file << "..." << std::endl;
-        auto raw_data = readDataFile(data_file, num_rows);
+        auto raw_data = readDataFile(data_file, num_rows_begin, num_rows_end);
         if (raw_data.empty()) {
             std::cerr << "Error: No data loaded!" << std::endl;
             controller.update_status("battery_lifespan", "stopped", 0, 0, 0.0, 0.0, 0.0, 0.0, "Data load failed");
@@ -965,6 +989,17 @@ namespace tju_torch {
 
         int num_samples = static_cast<int>(input_data_rows.size());
         int num_features = static_cast<int>(input_data_rows[0].size());
+
+        int numTimeStepsTrain = 300;
+        if (config.contains("training_sample_ratio")) {
+            double ratio = config.value("training_sample_ratio", 0.5);
+            numTimeStepsTrain = static_cast<int>(std::round(ratio * num_samples));
+        } else if (config.contains("train_samples")) {
+            numTimeStepsTrain = config.value("train_samples", 300);
+        }
+        if (numTimeStepsTrain <= 0) numTimeStepsTrain = 1;
+        if (numTimeStepsTrain > num_samples) numTimeStepsTrain = num_samples;
+
         int num_test = num_samples - numTimeStepsTrain;
 
         torch::Tensor input_train = torch::zeros({num_features, numTimeStepsTrain});
@@ -1128,18 +1163,25 @@ namespace tju_torch {
         }
 
         double eol_time = -1.0;
+        double real_lifetime = -1.0;
         std::string eol_message;
         if (eol_index >= 0) {
             int data_idx = numTimeStepsTrain + w - 1 + eol_index;
             if (data_idx < static_cast<int>(tt.size())) {
                 eol_time = tt[data_idx];
+                real_lifetime = eol_time - time_begin;
             }
             eol_message = "EOL at step " + std::to_string(eol_index) +
-                          " (time=" + std::to_string(eol_time) + "h, V=" + std::to_string(aV_hybrid[eol_index]) + ")";
+                          " (time=" + std::to_string(eol_time) + "h, real_lifetime=" + std::to_string(real_lifetime) +
+                          "h, V=" + std::to_string(aV_hybrid[eol_index]) + ")";
             std::cout << "Max predicted voltage: " << V_max << std::endl;
             std::cout << "80% threshold: " << V_threshold << std::endl;
             std::cout << "EOL occurs at prediction step " << eol_index
                     << " (data index " << data_idx << ", time = " << eol_time << " h)" << std::endl;
+            if (time_begin > 0.0 && real_lifetime >= 0.0) {
+                std::cout << "Real lifetime (after subtracting time_begin=" << time_begin << "): "
+                        << real_lifetime << " h" << std::endl;
+            }
         } else {
             eol_message = "No EOL crossing detected within prediction horizon";
             std::cout << "Max predicted voltage: " << V_max << std::endl;

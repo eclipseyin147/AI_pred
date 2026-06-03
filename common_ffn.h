@@ -194,7 +194,7 @@ inline std::unique_ptr<DataNormalizer> create_normalizer(NormalizationMethod met
 // ============================================================================
 // Read whitespace-delimited data file
 // ============================================================================
-inline std::vector<std::vector<double>> readDataFile(const std::string& filename, int numRows) {
+inline std::vector<std::vector<double>> readDataFile(const std::string& filename, int numRowsBegin, int numRowsEnd) {
     std::vector<std::vector<double>> data;
     std::ifstream file(filename);
     if (!file.is_open()) {
@@ -202,7 +202,15 @@ inline std::vector<std::vector<double>> readDataFile(const std::string& filename
         return data;
     }
     std::string line;
+    int currentRow = 0;
     while (std::getline(file, line)) {
+        if (currentRow < numRowsBegin) {
+            ++currentRow;
+            continue;
+        }
+        if (numRowsEnd > 0 && currentRow >= numRowsEnd) {
+            break;
+        }
         std::vector<double> row;
         std::stringstream ss(line);
         double value;
@@ -212,9 +220,7 @@ inline std::vector<std::vector<double>> readDataFile(const std::string& filename
         if (!row.empty()) {
             data.push_back(row);
         }
-        if (numRows > 0 && data.size() >= static_cast<size_t>(numRows)) {
-            break;
-        }
+        ++currentRow;
     }
     file.close();
     return data;
