@@ -866,6 +866,7 @@ namespace tju_torch {
         int window_size = config.value("window_size", 5);
         double RR = config.value("rr", 4.0);
         double time_begin = config.value("time_begin", 0.0);
+        double eol_threshold_ratio = config.value("eol_threshold_ratio", 0.80);
 
         // Column configuration
         std::vector<int> input_columns;
@@ -1153,7 +1154,7 @@ namespace tju_torch {
         // Battery End-of-Life (EOL) estimation
         std::cout << "\n=== Battery End-of-Life (EOL) Estimate ===" << std::endl;
         double V_max = *std::max_element(aV_hybrid.begin(), aV_hybrid.end());
-        double V_threshold = 0.80 * V_max;
+        double V_threshold = eol_threshold_ratio * V_max;
         int eol_index = -1;
         for (size_t i = 0; i < aV_hybrid.size(); ++i) {
             if (aV_hybrid[i] <= V_threshold) {

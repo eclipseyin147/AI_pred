@@ -259,6 +259,7 @@ For `battery_lifespan` mode, the input features and output target are selected b
 
 | `num_rows_end` | `int` | `battery_lifespan` | Ending row index (exclusive) to read from the text data file. Use `-1` or omit to read until end. |
 | `time_begin` | `double` | `battery_lifespan` | Starting time offset (in hours) written by the GUI. When calculating EOL, this value is subtracted from the absolute time to obtain the real lifetime. Default is `0.0`. |
+| `eol_threshold_ratio` | `double` | `battery_lifespan` | Ratio of maximum predicted voltage used as the EOL threshold. EOL is detected when predicted voltage falls below `eol_threshold_ratio * V_max`. Default is `0.80`.
 
 > **Backward compatibility**: The legacy `num_rows` field is still supported. If `num_rows_begin`/`num_rows_end` are not present but `num_rows` is, the behavior defaults to `num_rows_begin=0` and `num_rows_end=num_rows`.
 

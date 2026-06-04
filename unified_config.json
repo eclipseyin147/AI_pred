@@ -44,6 +44,7 @@
     "num_rows_begin": 0,
     "num_rows_end": 900,
     "time_begin": 0.0,
+    "eol_threshold_ratio": 0.80,
     "rr": 4.0,
     "input_columns": [4, 5, 8, 10],
     "output_column": 11,
