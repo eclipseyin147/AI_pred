@@ -12,82 +12,141 @@
 #include <omp.h>
 
 namespace tju_torch {
-    // SEDM (Semi-Empirical Dynamic Model) function
-    static double SEDM(double tt, double Pc, double Pa, double T, double I) {
-        const int nn = 300;
-        const double A_cell = 190e-4;
-        const double L_Pt = 4;
-        const double F = 96487;
-        const double R = 8.314472;
-        const double P0 = 101325;
-        const double Alpha_c = 0.2;
-        const double Alpha_a = 0.8;
-        const double Gamma_a = 0.5;
-        const double Gamma_c = 1.0;
-        const double c_o2_ref = 3.39;
-        const double t_MEM = 15e-6;
-        const double t_CLc = 15e-6;
-        const double t_MPLc = 30e-6;
-        const double t_GDLc = 180e-6;
-        const double t_CHc = 440e-6;
-        const double POR_CLc = 0.455;
-        const double POR_MPLc = 0.4;
-        const double POR_GDLc = 0.6;
-        const double j_ref_a = 10;
-        const double j_ref_c = 1e-5;
 
-        const double b_leak = 1e-3;
-        const double b_ECSA = -2e-4;
-        const double b_ion = 2e-4;
-        const double b_R = 1e-8;
-        const double b_D = 1e-1;
-        const double b_B = 1e-5;
+sedmInputParameter parse_sedm_input_parameter(const nlohmann::json& config) {
+    sedmInputParameter p;
 
-        double r_leak = std::exp(b_leak * tt);
-        double r_ECSA = std::exp(b_ECSA * tt);
-        double r_ion = std::exp(b_ion * tt);
+    p.nn = config.value("nn", p.nn);
+    p.A_cell = config.value("A_cell", p.A_cell);
+    p.t_MEM = config.value("t_MEM", p.t_MEM);
+    p.t_CLc = config.value("t_CLc", p.t_CLc);
+    p.t_MPLc = config.value("t_MPLc", p.t_MPLc);
+    p.t_GDLc = config.value("t_GDLc", p.t_GDLc);
+    p.t_CHc = config.value("t_CHc", p.t_CHc);
+    p.POR_CLc = config.value("POR_CLc", p.POR_CLc);
+    p.POR_MPLc = config.value("POR_MPLc", p.POR_MPLc);
+    p.POR_GDLc = config.value("POR_GDLc", p.POR_GDLc);
+    p.Alpha_a = config.value("Alpha_a", p.Alpha_a);
+    p.Alpha_c = config.value("Alpha_c", p.Alpha_c);
+    p.j_ref_a = config.value("j_ref_a", p.j_ref_a);
+    p.j_ref_c = config.value("j_ref_c", p.j_ref_c);
+    p.K_c_ini = config.value("K_c_ini", p.K_c_ini);
+    p.b_leak = config.value("b_leak", p.b_leak);
+    p.b_ECSA = config.value("b_ECSA", p.b_ECSA);
+    p.b_ion = config.value("b_ion", p.b_ion);
+    p.b_R = config.value("b_R", p.b_R);
+    p.b_D = config.value("b_D", p.b_D);
+    p.b_B = config.value("b_B", p.b_B);
 
-        double i_leak_ini = 20 * 190e-4;
-        double A_ECSA_ini = 60 * (A_cell * L_Pt);
-        double R_ion_ini = 100e-7 / A_cell;
-        double R_ele_ini = 20e-7 / A_cell;
-        double D_o2_ini = 2.652e-5 * std::pow(T / 333.15, 1.5) * (1.0 / Pc) * std::pow(POR_GDLc, 1.5);
-        double K_c_ini = 100;
+    return p;
+}
 
-        double i_leak = i_leak_ini * r_leak;
-        double A_ECSA = A_ECSA_ini * r_ECSA;
-        double R_total = R_ion_ini * r_ion + (R_ele_ini + b_R * tt);
-        double D_o2 = D_o2_ini + b_D * tt;
-        double K_c = K_c_ini + b_B * tt;
-
-        double E_nernst = 1.229 - 0.846e-3 * (T - 298.15) +
-                          R * T / 2.0 / F * (std::log(Pa) + 0.5 * std::log(Pc * 0.21));
-
-        double b_a = R * T / (2.0 * Alpha_a * F);
-        double theta_T_a = std::exp(-1400.0 * (1.0 / T - 1.0 / 298.15));
-        double c_h2_CLa = Pa * P0 / R / T;
-        double k_ele_a = j_ref_a * std::pow(c_h2_CLa / c_o2_ref, Gamma_a) * theta_T_a;
-        double V_act_a = b_a * (i_leak + I) / A_ECSA / k_ele_a;
-
-        double b_c = R * T / (4.0 * Alpha_c * F);
-        double theta_T_c = std::exp(-7900.0 * (1.0 / T - 1.0 / 298.15));
-        double c_o2_CLc = 0.21 * Pc * P0 / R / T;
-        double k_ele_c = j_ref_c * std::pow(c_o2_CLc / c_o2_ref, Gamma_c) * theta_T_c;
-        double V_act_c = -b_c * std::log((i_leak + I) / A_ECSA / k_ele_c);
-
-        double V_ohm = -I * R_total;
-
-        double D_o2_GDLc = 2.652e-5 * std::pow(T / 333.15, 1.5) * (1.0 / Pc) * std::pow(POR_GDLc, 1.5);
-        double P_o2 = Pc * 0.21 * P0;
-        double I_lim = 4.0 * F * (D_o2_GDLc / t_GDLc) * (P_o2 / R / T);
-        double term_c = 1.0 - (I / A_ECSA) / I_lim;
-        double V_conc_c = K_c * b_c * std::log(term_c);
-
-        double V_cell_sim = E_nernst + V_act_a + V_act_c + V_ohm + V_conc_c;
-        double V_stack_sim = V_cell_sim * static_cast<double>(nn);
-
-        return V_stack_sim;
+static nlohmann::json get_lbfgs_config(const nlohmann::json& config) {
+    if (!config.contains("optimizer")) {
+        return nlohmann::json::object();
     }
+    const auto& optimizer = config.at("optimizer");
+    if (!optimizer.is_object() || !optimizer.contains("lbfgs")) {
+        return nlohmann::json::object();
+    }
+    const auto& lbfgs = optimizer.at("lbfgs");
+    if (!lbfgs.is_object()) {
+        return nlohmann::json::object();
+    }
+    return lbfgs;
+}
+
+static nlohmann::json get_adamw_config(const nlohmann::json& config) {
+    if (!config.contains("optimizer")) {
+        return nlohmann::json::object();
+    }
+    const auto& optimizer = config.at("optimizer");
+    if (!optimizer.is_object() || !optimizer.contains("adamw")) {
+        return nlohmann::json::object();
+    }
+    const auto& adamw = optimizer.at("adamw");
+    if (!adamw.is_object()) {
+        return nlohmann::json::object();
+    }
+    return adamw;
+}
+
+// SEDM (Semi-Empirical Dynamic Model) function
+// Parameter declaration order matches Prediction_model_2.m; values from sedmInputParameter where configurable.
+static double SEDM(const sedmInputParameter& p, double tt, double Pc, double Pa, double T, double I) {
+    const int nn = p.nn;
+    const double A_cell = p.A_cell;
+    const double L_Pt = 4;
+    const double F = 96487;
+    const double R = 8.314472;
+    const double P0 = 101325;
+    const double Alpha_c = p.Alpha_c;
+    const double Alpha_a = p.Alpha_a;
+    const double Gamma_a = 0.5;
+    const double Gamma_c = 1.0;
+    const double c_o2_ref = 3.39;
+    const double t_MEM = p.t_MEM;
+    const double t_CLc = p.t_CLc;
+    const double t_MPLc = p.t_MPLc;
+    const double t_GDLc = p.t_GDLc;
+    const double t_CHc = p.t_CHc;
+    const double POR_CLc = p.POR_CLc;
+    const double POR_MPLc = p.POR_MPLc;
+    const double POR_GDLc = p.POR_GDLc;
+    const double j_ref_a = p.j_ref_a;
+    const double j_ref_c = p.j_ref_c;
+    const double b_leak = p.b_leak;
+    const double b_ECSA = p.b_ECSA;
+    const double b_ion = p.b_ion;
+    const double b_R = p.b_R;
+    const double b_D = p.b_D;
+    const double b_B = p.b_B;
+
+    double r_leak = std::exp(b_leak * tt);
+    double r_ECSA = std::exp(b_ECSA * tt);
+    double r_ion = std::exp(b_ion * tt);
+
+    double i_leak_ini = 20.0 * A_cell;
+    double A_ECSA_ini = 60 * (A_cell * L_Pt);
+    double R_ion_ini = 100e-7 / A_cell;
+    double R_ele_ini = 20e-7 / A_cell;
+    double D_o2_ini = 2.652e-5 * std::pow(T / 333.15, 1.5) * (1.0 / Pc) * std::pow(POR_GDLc, 1.5);
+    double K_c_ini = p.K_c_ini;
+
+    double i_leak = i_leak_ini * r_leak;
+    double A_ECSA = A_ECSA_ini * r_ECSA;
+    double R_total = R_ion_ini * r_ion + (R_ele_ini + b_R * tt);
+    double D_o2 = D_o2_ini + b_D * tt;
+    double K_c = K_c_ini + b_B * tt;
+
+    double E_nernst = 1.229 - 0.846e-3 * (T - 298.15) +
+                      R * T / 2.0 / F * (std::log(Pa) + 0.5 * std::log(Pc * 0.21));
+
+    double b_a = R * T / (2.0 * Alpha_a * F);
+    double theta_T_a = std::exp(-1400.0 * (1.0 / T - 1.0 / 298.15));
+    double c_h2_CLa = Pa * P0 / R / T;
+    double k_ele_a = j_ref_a * std::pow(c_h2_CLa / c_o2_ref, Gamma_a) * theta_T_a;
+    double V_act_a = b_a * (i_leak + I) / A_ECSA / k_ele_a;
+
+    double b_c = R * T / (4.0 * Alpha_c * F);
+    double theta_T_c = std::exp(-7900.0 * (1.0 / T - 1.0 / 298.15));
+    double c_o2_CLc = 0.21 * Pc * P0 / R / T;
+    double k_ele_c = j_ref_c * std::pow(c_o2_CLc / c_o2_ref, Gamma_c) * theta_T_c;
+    double V_act_c = -b_c * std::log((i_leak + I) / A_ECSA / k_ele_c);
+
+    double V_ohm = -I * R_total;
+
+    double D_o2_GDLc = 2.652e-5 * std::pow(T / 333.15, 1.5) * (1.0 / Pc) * std::pow(POR_GDLc, 1.5);
+    double P_o2 = Pc * 0.21 * P0;
+    double I_lim = 4.0 * F * (D_o2_GDLc / t_GDLc) * (P_o2 / R / T);
+    double term_c = 1.0 - (I / A_ECSA) / I_lim;
+    double V_conc_c = K_c * b_c * std::log(term_c);
+
+    double V_cell_sim = E_nernst + V_act_a + V_act_c + V_ohm + V_conc_c;
+    double V_stack_sim = V_cell_sim * static_cast<double>(nn);
+
+    return V_stack_sim;
+}
 
     void BatteryLifespanManager::run(const nlohmann::json &config) {
         std::string submode = config.value("submode", "predict");
@@ -396,7 +455,7 @@ namespace tju_torch {
             // Optimizer-specific training
             // =====================================================================
             if (optimizer_type == "lbfgs") {
-                auto lbfgs_config = config["optimizer"]["lbfgs"];
+                const nlohmann::json lbfgs_config = get_lbfgs_config(config);
                 double lr = lbfgs_config.value("learning_rate", 1.0);
 
                 if (batch_size < num_train_samples) {
@@ -553,7 +612,7 @@ namespace tju_torch {
                     }
                 }
             } else if (optimizer_type == "adamw") {
-                auto adamw_config = config["optimizer"]["adamw"];
+                const nlohmann::json adamw_config = get_adamw_config(config);
                 double lr = adamw_config.value("learning_rate", 0.001);
                 torch::optim::AdamW optimizer(
                     net->parameters(),
@@ -868,6 +927,8 @@ namespace tju_torch {
         double time_begin = config.value("time_begin", 0.0);
         double eol_threshold_ratio = config.value("eol_threshold_ratio", 0.80);
 
+        sedmInputParameter input_params = parse_sedm_input_parameter(config);
+
         // Column configuration
         std::vector<int> input_columns;
         if (config.contains("input_columns") && config["input_columns"].is_array()) {
@@ -941,7 +1002,7 @@ namespace tju_torch {
                 Pc.push_back(row[input_columns[0]]);
                 T.push_back(row[input_columns[2]] + 273.15);
                 I.push_back(row[input_columns[3]]);
-                V_cell_exp.push_back(row[output_column] / 300.0);
+                V_cell_exp.push_back(row[output_column] / static_cast<double>(input_params.nn));
             }
         }
 
@@ -1092,7 +1153,7 @@ namespace tju_torch {
 
             // SEDM prediction
             int idx = numTimeStepsTrain + w - 1 + n;
-            double V_SEM = SEDM(tt[idx], Pc[idx], Pa[idx], T[idx], I[idx]);
+            double V_SEM = SEDM(input_params, tt[idx], Pc[idx], Pa[idx], T[idx], I[idx]);
 
             // Hybrid prediction
             double V_hybrid = (RR * V_SEM + V_DDM) / (RR + 1.0);

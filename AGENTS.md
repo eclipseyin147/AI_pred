@@ -187,7 +187,7 @@ The unified executable uses a single JSON configuration file. The top-level `mod
     "learning_rate": 1.0,
     "epochs": 1000,
     "batch_size": 32,
-    "optimizer_type": "lbfgs",
+    "optimizer_type": "adamw",
     "optimizer": {
       "lbfgs": { "learning_rate": 1.0, "max_iter": 20, "max_eval": 25, "tolerance_grad": 1e-7, "tolerance_change": 1e-9, "history_size": 100 },
       "adamw": { "learning_rate": 0.001, "beta1": 0.9, "beta2": 0.999, "eps": 1e-8, "weight_decay": 0.001 }
@@ -204,7 +204,28 @@ The unified executable uses a single JSON configuration file. The top-level `mod
     "rr": 4.0,
     "input_columns": [4, 5, 8, 10],
     "output_column": 11,
-    "time_column": 0
+    "time_column": 0,
+    "nn": 300,
+    "A_cell": 0.019,
+    "t_MEM": 0.000015,
+    "t_CLc": 0.000015,
+    "t_MPLc": 0.00003,
+    "t_GDLc": 0.00018,
+    "t_CHc": 0.00044,
+    "POR_CLc": 0.455,
+    "POR_MPLc": 0.4,
+    "POR_GDLc": 0.6,
+    "Alpha_a": 0.8,
+    "Alpha_c": 0.2,
+    "j_ref_a": 10.0,
+    "j_ref_c": 0.00001,
+    "K_c_ini": 100.0,
+    "b_leak": 0.001,
+    "b_ECSA": -0.0002,
+    "b_ion": 0.0002,
+    "b_R": 1e-8,
+    "b_D": 0.1,
+    "b_B": 0.00001
   },
   "faultdiag": {
     "submode": "tcn",
@@ -269,6 +290,23 @@ If these fields are omitted, the defaults match the original hard-coded behavior
 - `time_column`: `0`
 
 > **SEDM note**: The SEDM physics model (used in `predict` submode) expects `input_columns` to contain at least 4 columns mapping to `[Pc, Pa, T, I]` in that order.
+
+#### SEDM Input Parameters (flat keys under `battery_lifespan`)
+
+Optional fields at the same level as `input_data_path`, `rr`, etc.; omitted keys use `sedmInputParameter` defaults in `sedm_manager.h`.
+
+| Field | Default | Category | Description |
+|-------|---------|----------|-------------|
+| `nn` | `300` | Stack geometry | Number of cells; stack voltage = cell voltage × `nn` |
+| `A_cell` | `0.019` | Stack geometry | Active area (m²) |
+| `t_MEM`, `t_CLc`, `t_MPLc`, `t_GDLc`, `t_CHc` | see config | Stack geometry | Layer thicknesses (m); `t_GDLc` used in limit-current term |
+| `POR_CLc`, `POR_MPLc`, `POR_GDLc` | see config | Stack geometry | Porosities; `POR_GDLc` used in diffusion terms |
+| `Alpha_a`, `Alpha_c` | `0.8`, `0.2` | Initialization | Charge-transfer coefficients |
+| `j_ref_a`, `j_ref_c` | `10.0`, `1e-5` | Initialization | Reference exchange current densities |
+| `K_c_ini` | `100.0` | Initialization | Initial concentration-loss scaling |
+| `b_leak`, `b_ECSA`, `b_ion`, `b_R`, `b_D`, `b_B` | see config | Degradation | Time-dependent degradation factors |
+
+Constants fixed in code (not in JSON): `F`, `R`, `P0`, `Gamma_a/c`, `c_o2_ref`, `L_Pt`, and derived `i_leak_ini` (= `20 * A_cell`), `A_ECSA_ini`, `R_ion_ini`, `R_ele_ini`.
 
 #### Required File Path Fields (per mode)
 
