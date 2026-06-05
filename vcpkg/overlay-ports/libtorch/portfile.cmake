@@ -13,6 +13,8 @@ vcpkg_from_github(
         fix-glog.patch
         fix-pytorch-pr-156630.patch # https://github.com/pytorch/pytorch/pull/156630
         fix-dist-cuda.patch
+        fix-nvtx3-detect.patch
+        fix-cuda12-nvtx-fallback.patch
         )
 
 file(REMOVE_RECURSE "${SOURCE_PATH}/caffe2/core/macros.h") # We must use generated header files
@@ -188,6 +190,11 @@ vcpkg_cmake_configure(
         USE_SYSTEM_BIND11
         MKLDNN_CPU_RUNTIME
         PYTHON_LIBRARY
+        Python3_EXECUTABLE
+        USE_METAL
+        USE_OPENCV
+        USE_ROCKSDB
+        USE_ZSTD
 )
 
 vcpkg_cmake_install()

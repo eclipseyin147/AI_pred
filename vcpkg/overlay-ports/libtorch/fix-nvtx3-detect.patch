@@ -1,0 +1,30 @@
+diff --git a/cmake/public/cuda.cmake b/cmake/public/cuda.cmake
+--- a/cmake/public/cuda.cmake
++++ b/cmake/public/cuda.cmake
+@@ -169,11 +169,20 @@
+         CUDA::cudart)
+ endif()
+ 
+ # nvToolsExt
+-if(USE_SYSTEM_NVTX)
+-  find_path(nvtx3_dir NAMES nvtx3 PATHS ${CUDA_INCLUDE_DIRS})
+-else()
+-  find_path(nvtx3_dir NAMES nvtx3 PATHS "${PROJECT_SOURCE_DIR}/third_party/NVTX/c/include" NO_DEFAULT_PATH)
+-endif()
++# CUDA include/nvtx3 may lack nvtx3.hpp; find_path(NAMES nvtx3) matched that directory incorrectly.
++set(_nvtx3_hpp_dir "")
++if(USE_SYSTEM_NVTX)
++  find_path(_nvtx3_hpp_dir NAMES nvtx3.hpp PATH_SUFFIXES nvtx3 PATHS ${CUDA_INCLUDE_DIRS})
++endif()
++if(NOT _nvtx3_hpp_dir)
++  find_path(_nvtx3_hpp_dir NAMES nvtx3.hpp PATH_SUFFIXES nvtx3
++    PATHS "${PROJECT_SOURCE_DIR}/third_party/NVTX/c/include" NO_DEFAULT_PATH)
++endif()
++if(_nvtx3_hpp_dir)
++  get_filename_component(nvtx3_dir "${_nvtx3_hpp_dir}" DIRECTORY)
++else()
++  set(nvtx3_dir "")
++endif()
+ find_package_handle_standard_args(nvtx3 DEFAULT_MSG nvtx3_dir)
+ if(nvtx3_FOUND)
+   add_library(torch::nvtx3 INTERFACE IMPORTED)

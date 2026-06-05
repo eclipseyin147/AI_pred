@@ -1,0 +1,48 @@
+diff --git a/cmake/public/cuda.cmake b/cmake/public/cuda.cmake
+--- a/cmake/public/cuda.cmake
++++ b/cmake/public/cuda.cmake
+@@ -186,11 +186,17 @@
+ endif()
+ find_package_handle_standard_args(nvtx3 DEFAULT_MSG nvtx3_dir)
+ if(nvtx3_FOUND)
+   add_library(torch::nvtx3 INTERFACE IMPORTED)
+   target_include_directories(torch::nvtx3 INTERFACE "${nvtx3_dir}")
+   target_compile_definitions(torch::nvtx3 INTERFACE TORCH_CUDA_USE_NVTX3)
+ else()
+   message(WARNING "Cannot find NVTX3, find old NVTX instead")
+   add_library(torch::nvtoolsext INTERFACE IMPORTED)
+-  set_property(TARGET torch::nvtoolsext PROPERTY INTERFACE_LINK_LIBRARIES CUDA::nvToolsExt)
++  if(TARGET CUDA::nvToolsExt)
++    set_property(TARGET torch::nvtoolsext PROPERTY INTERFACE_LINK_LIBRARIES CUDA::nvToolsExt)
++  elseif(TARGET CUDA::nvtx3)
++    target_link_libraries(torch::nvtoolsext INTERFACE CUDA::nvtx3)
++  else()
++    message(FATAL_ERROR "NVTX: CUDA toolkit provides neither CUDA::nvToolsExt nor CUDA::nvtx3.")
++  endif()
+ endif()
+
+
+diff --git a/torch/csrc/profiler/stubs/cuda.cpp b/torch/csrc/profiler/stubs/cuda.cpp
+--- a/torch/csrc/profiler/stubs/cuda.cpp
++++ b/torch/csrc/profiler/stubs/cuda.cpp
+@@ -3,7 +3,7 @@
+ #ifdef TORCH_CUDA_USE_NVTX3
+ #include <nvtx3/nvtx3.hpp>
+ #else
+-#include <nvToolsExt.h>
++#include <nvtx3/nvToolsExt.h>
+ #endif
+ #else // ROCM_ON_WINDOWS
+ #include <c10/util/Exception.h>
+diff --git a/torch/csrc/cuda/shared/nvtx.cpp b/torch/csrc/cuda/shared/nvtx.cpp
+--- a/torch/csrc/cuda/shared/nvtx.cpp
++++ b/torch/csrc/cuda/shared/nvtx.cpp
+@@ -5,7 +5,7 @@
+ #ifdef TORCH_CUDA_USE_NVTX3
+ #include <nvtx3/nvtx3.hpp>
+ #else // TORCH_CUDA_USE_NVTX3
+-#include <nvToolsExt.h>
++#include <nvtx3/nvToolsExt.h>
+ #endif // TORCH_CUDA_USE_NVTX3
+ #else // ROCM_ON_WINDOWS
+ #include <c10/util/Exception.h>
