@@ -71,6 +71,14 @@ static nlohmann::json get_adamw_config(const nlohmann::json& config) {
     return adamw;
 }
 
+static double time_for_sample(const std::vector<double>& row_times, int sample_index, int window_size) {
+    const int data_idx = sample_index + window_size - 1;
+    if (data_idx >= 0 && data_idx < static_cast<int>(row_times.size())) {
+        return row_times[static_cast<size_t>(data_idx)];
+    }
+    return 0.0;
+}
+
 // SEDM (Semi-Empirical Dynamic Model) function
 // Parameter declaration order matches Prediction_model_2.m; values from sedmInputParameter where configurable.
 static double SEDM(const sedmInputParameter& p, double tt, double Pc, double Pa, double T, double I) {
@@ -148,8 +156,7 @@ static double SEDM(const sedmInputParameter& p, double tt, double Pc, double Pa,
     return V_stack_sim;
 }
 
-    void BatteryLifespanManager::run(const nlohmann::json &config) {
-        std::string submode = config.value("submode", "predict");
+    void BatteryLifespanManager::run(const nlohmann::json &config, const std::string &submode) {
         if (submode == "train") {
             runTrain(config);
         } else if (submode == "predict") {
@@ -229,8 +236,9 @@ static double SEDM(const sedmInputParameter& p, double tt, double Pc, double Pa,
             input_columns = {4, 5, 8, 10};
         }
         int output_column = config.value("output_column", 11);
+        int time_column = config.value("time_column", 0);
 
-        int max_col = output_column;
+        int max_col = std::max(output_column, time_column);
         for (int col: input_columns) {
             if (col > max_col) max_col = col;
         }
@@ -288,8 +296,10 @@ static double SEDM(const sedmInputParameter& p, double tt, double Pc, double Pa,
 
         // Prepare Input and Output for neural network
         std::vector<std::vector<double> > Input, Output;
+        std::vector<double> row_times;
         for (const auto &row: raw_data) {
             if (row.size() >= static_cast<size_t>(min_cols)) {
+                row_times.push_back(row[time_column]);
                 std::vector<double> in_row;
                 for (int col: input_columns) {
                     in_row.push_back(row[col]);
@@ -328,6 +338,14 @@ static double SEDM(const sedmInputParameter& p, double tt, double Pc, double Pa,
         }
 
         std::cout << "Created " << input_data_rows.size() << " samples with sliding window." << std::endl;
+
+        if (input_data_rows.empty()) {
+            std::cerr << "Error: No training samples created. Check input_data_path format (txt/csv), "
+                      << "num_rows_begin/end, and input_columns/output_column." << std::endl;
+            controller.update_status("battery_lifespan", "stopped", 0, epochs, 0.0, 0.0, 0.0, 0.0,
+                                     "No samples from data file");
+            return;
+        }
 
         int num_samples = static_cast<int>(input_data_rows.size());
         int num_features = static_cast<int>(input_data_rows[0].size());
@@ -862,12 +880,14 @@ static double SEDM(const sedmInputParameter& p, double tt, double Pc, double Pa,
             std::cout << "Final R2:   " << R2 << std::endl;
 
             std::ofstream outfile(output_predictions_path);
-            outfile << "YTest,YPred,Error\n";
+            outfile << "Time,YTest,YPred,Error\n";
             for (int i = 0; i < kk; ++i) {
+                const int sample_index = train_limit + i;
+                const double time_val = time_for_sample(row_times, sample_index, w);
                 double y_test = output_test[i].item<double>();
                 double y_pred = YPred[i].item<double>();
                 double error = y_test - y_pred;
-                outfile << y_test << "," << y_pred << "," << error << "\n";
+                outfile << time_val << "," << y_test << "," << y_pred << "," << error << "\n";
             }
             outfile.close();
             std::cout << "\nPredictions saved to " << output_predictions_path << std::endl;
@@ -1048,6 +1068,14 @@ static double SEDM(const sedmInputParameter& p, double tt, double Pc, double Pa,
         }
 
         std::cout << "Created " << input_data_rows.size() << " samples with sliding window." << std::endl;
+
+        if (input_data_rows.empty()) {
+            std::cerr << "Error: No prediction samples created. Check input_data_path format (txt/csv), "
+                      << "num_rows_begin/end, and input_columns/output_column." << std::endl;
+            controller.update_status("battery_lifespan", "stopped", 0, 0, 0.0, 0.0, 0.0, 0.0,
+                                     "No samples from data file");
+            return;
+        }
 
         int num_samples = static_cast<int>(input_data_rows.size());
         int num_features = static_cast<int>(input_data_rows[0].size());
@@ -1253,9 +1281,12 @@ static double SEDM(const sedmInputParameter& p, double tt, double Pc, double Pa,
 
         // Save results
         std::ofstream outfile(output_predictions_path);
-        outfile << "YTest,V_SEM,V_DDM,V_Hybrid,Error_SEM,Error_DDM,Error_Hybrid\n";
+        outfile << "Time,YTest,V_SEM,V_DDM,V_Hybrid,Error_SEM,Error_DDM,Error_Hybrid\n";
         for (size_t i = 0; i < YTest_vec.size(); ++i) {
-            outfile << YTest_vec[i] << ","
+            const int sample_index = numTimeStepsTrain + static_cast<int>(i);
+            const double time_val = time_for_sample(tt, sample_index, w);
+            outfile << time_val << ","
+                    << YTest_vec[i] << ","
                     << aV_SEM[i] << ","
                     << aV_DDM[i] << ","
                     << aV_hybrid[i] << ","

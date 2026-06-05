@@ -1,7 +1,5 @@
 {
-  "mode": "battery_lifespan",
   "battery_lifespan": {
-    "submode": "train",
     "input_data_path": "Data_V13_40kW.txt",
     "model_path": "battery_best_model.pt",
     "output_predictions_path": "battery_predictions.csv",

@@ -33,7 +33,7 @@ sedmInputParameter parse_sedm_input_parameter(const nlohmann::json& config);
 
 class BatteryLifespanManager {
 public:
-    void run(const nlohmann::json& config);
+    void run(const nlohmann::json& config, const std::string& submode);
 
 private:
     void runTrain(const nlohmann::json& config);

@@ -11,147 +11,141 @@
 
 using json = nlohmann::json;
 
+namespace {
+
+constexpr const char* kDefaultConfigFile = "unified_config.json";
+constexpr const char* kDefaultMode = "battery_lifespan";
+constexpr const char* kDefaultLifespanSubmode = "train";
+
+struct CliOptions {
+    std::string config_path = kDefaultConfigFile;
+    std::string mode;
+    std::string submode;
+    bool show_help = false;
+};
+
 void print_usage(const char* program_name) {
-    std::cout << "Usage: " << program_name << " [config_file.json]\n\n";
-    std::cout << "Unified executable for TJU-Torch project.\n";
-    std::cout << "Modes: battery_lifespan, faultdiag (set in config file)\n";
-    std::cout << "  battery_lifespan submodes: train, predict\n\n";
-    std::cout << "If no config file is provided, 'unified_config.json' will be used.\n";
+    std::cout << "Usage: " << program_name << " [--mode <mode>] [--submode <submode>] [--config <path>]\n\n";
+    std::cout << "Unified executable for TJU-Torch project.\n\n";
+    std::cout << "Options:\n";
+    std::cout << "  -m, --mode <mode>       Tool type: battery_lifespan | faultdiag\n";
+    std::cout << "                          (default: " << kDefaultMode << ")\n";
+    std::cout << "  -s, --submode <submode> Lifespan task (battery_lifespan only): train | predict\n";
+    std::cout << "                          (default: " << kDefaultLifespanSubmode << ")\n";
+    std::cout << "  -c, --config <path>     Config file path (default: ./" << kDefaultConfigFile << ")\n";
+    std::cout << "  -h, --help              Show this help\n\n";
+    std::cout << "Run task (mode/submode) comes from CLI with built-in defaults, not from JSON.\n";
+    std::cout << "JSON holds persistent parameters (paths, hyperparameters, physics settings).\n\n";
+    std::cout << "Examples:\n";
+    std::cout << "  " << program_name << " --mode battery_lifespan --submode train\n";
+    std::cout << "  " << program_name << " --mode battery_lifespan --submode predict\n";
+    std::cout << "  " << program_name << " --mode faultdiag\n";
     std::cout << std::endl;
 }
 
-json load_config(const std::string& config_file) {
+bool parse_cli(int argc, char* argv[], CliOptions& cli) {
+    for (int i = 1; i < argc; ++i) {
+        const std::string arg = argv[i];
+        if (arg == "--help" || arg == "-h") {
+            cli.show_help = true;
+            return true;
+        }
+        if (arg == "--mode" || arg == "-m") {
+            if (i + 1 >= argc) {
+                std::cerr << "Error: " << arg << " requires a value." << std::endl;
+                return false;
+            }
+            cli.mode = argv[++i];
+            continue;
+        }
+        if (arg == "--submode" || arg == "-s") {
+            if (i + 1 >= argc) {
+                std::cerr << "Error: " << arg << " requires a value." << std::endl;
+                return false;
+            }
+            cli.submode = argv[++i];
+            continue;
+        }
+        if (arg == "--config" || arg == "-c") {
+            if (i + 1 >= argc) {
+                std::cerr << "Error: " << arg << " requires a value." << std::endl;
+                return false;
+            }
+            cli.config_path = argv[++i];
+            continue;
+        }
+        std::cerr << "Error: Unknown argument '" << arg << "'." << std::endl;
+        return false;
+    }
+    return true;
+}
+
+bool load_config(const std::string& config_file, json& config) {
     std::ifstream file(config_file);
     if (!file.is_open()) {
-        std::cerr << "Error: Could not open config file '" << config_file << "'." << std::endl;
-        std::cerr << "Using default configuration." << std::endl;
-
-        return json{
-            {"mode", "battery_lifespan"},
-            {"battery_lifespan", {
-                {"submode", "train"},
-                {"input_data_path", "Data_V13_40kW.txt"},
-                {"model_path", "battery_best_model.pt"},
-                {"output_predictions_path", "battery_predictions.csv"},
-                {"output_training_log_path", "battery_training_log.csv"},
-                {"control_file_path", "control.json"},
-                {"status_file_path", "status.json"},
-                {"hidden_layers", 2},
-                {"hidden_layer_neurons", {50, 50}},
-                {"learning_rate", 1.0},
-                {"epochs", 1000},
-                {"batch_size", 32},
-                {"optimizer_type", "lbfgs"},
-                {"optimizer", {
-                    {"lbfgs", {
-                        {"learning_rate", 1.0},
-                        {"max_iter", 20},
-                        {"max_eval", 25},
-                        {"tolerance_grad", 1e-7},
-                        {"tolerance_change", 1e-9},
-                        {"history_size", 100}
-                    }},
-                    {"adamw", {
-                        {"learning_rate", 0.001},
-                        {"beta1", 0.9},
-                        {"beta2", 0.999},
-                        {"eps", 1e-8},
-                        {"weight_decay", 0.001}
-                    }}
-                }},
-                {"normalization", {
-                    {"enabled", true},
-                    {"method", "minmax_neg1_1"}
-                }},
-                {"goal_loss", 1e-10},
-                {"max_iterations", 1000},
-                {"target_r2", 0.85},
-                {"print_interval", 200},
-                {"window_size", 5},
-                {"train_samples", 300},
-                {"num_rows", 900},
-                {"rr", 4.0},
-                {"input_columns", {4, 5, 8, 10}},
-                {"output_column", 11},
-                {"time_column", 0},
-                {"nn", 300},
-                {"A_cell", 0.019},
-                {"t_MEM", 0.000015},
-                {"t_CLc", 0.000015},
-                {"t_MPLc", 0.00003},
-                {"t_GDLc", 0.00018},
-                {"t_CHc", 0.00044},
-                {"POR_CLc", 0.455},
-                {"POR_MPLc", 0.4},
-                {"POR_GDLc", 0.6},
-                {"Alpha_a", 0.8},
-                {"Alpha_c", 0.2},
-                {"j_ref_a", 10.0},
-                {"j_ref_c", 0.00001},
-                {"K_c_ini", 100.0},
-                {"b_leak", 0.001},
-                {"b_ECSA", -0.0002},
-                {"b_ion", 0.0002},
-                {"b_R", 1e-8},
-                {"b_D", 0.1},
-                {"b_B", 0.00001}
-            }},
-            {"faultdiag", {
-                {"submode", "tcn"},
-                {"input_mat_path", "ALL_Traindata1.mat"},
-                {"output_model_path", "fault_best_model.pt"},
-                {"control_file_path", "control.json"},
-                {"status_file_path", "status.json"},
-                {"hidden_layers", 2},
-                {"hidden_layer_neurons", {64, 48}},
-                {"learning_rate", 0.001},
-                {"epochs", 100},
-                {"batch_size", 26},
-                {"optimizer", "adam"},
-                {"use_gpu", false},
-                {"data_var", "AXTrain3"},
-                {"label_var", "AYTrain"},
-                {"val_data_var", "AXTest3"},
-                {"val_label_var", "AYTest"},
-                {"train_split", 0.8},
-                {"validation_frequency", 10},
-                {"normalization", {
-                    {"enabled", true},
-                    {"method", "rescale_symmetric"}
-                }},
-                {"cnn_filter_size", 2},
-                {"cnn_num_filters", 32},
-                {"tcn_num_blocks", 4},
-                {"tcn_num_filters", 64},
-                {"tcn_filter_size", 3},
-                {"tcn_dropout", 0.005}
-            }}
-        };
+        std::cerr << "Error: Config file not found: " << config_file << std::endl;
+        return false;
     }
-
-    json config;
-    file >> config;
-    file.close();
-    return config;
+    try {
+        file >> config;
+    } catch (const std::exception& e) {
+        std::cerr << "Error: Failed to parse config file '" << config_file << "': " << e.what() << std::endl;
+        return false;
+    }
+    return true;
 }
+
+bool is_valid_mode(const std::string& mode) {
+    return mode == "battery_lifespan" || mode == "faultdiag";
+}
+
+bool is_valid_lifespan_submode(const std::string& submode) {
+    return submode == "train" || submode == "predict";
+}
+
+} // namespace
 
 int main(int argc, char* argv[]) {
     std::cout << "=== TJU-Torch Unified Executable ===" << std::endl;
 
-    // Parse command line
-    std::string config_file = "unified_config.json";
-    if (argc > 1) {
-        if (std::string(argv[1]) == "--help" || std::string(argv[1]) == "-h") {
-            print_usage(argv[0]);
-            return 0;
-        }
-        config_file = argv[1];
+    CliOptions cli;
+    if (!parse_cli(argc, argv, cli)) {
+        print_usage(argv[0]);
+        return 1;
+    }
+    if (cli.show_help) {
+        print_usage(argv[0]);
+        return 0;
     }
 
-    std::cout << "Loading configuration from: " << config_file << std::endl;
-    json config = load_config(config_file);
+    const std::string mode = cli.mode.empty() ? kDefaultMode : cli.mode;
+    if (!is_valid_mode(mode)) {
+        std::cerr << "Error: Unknown mode '" << mode << "'." << std::endl;
+        std::cerr << "Valid modes: 'battery_lifespan', 'faultdiag'" << std::endl;
+        return 1;
+    }
 
-    std::string mode = config.value("mode", "battery_lifespan");
+    std::string submode;
+    if (mode == "battery_lifespan") {
+        submode = cli.submode.empty() ? kDefaultLifespanSubmode : cli.submode;
+        if (!is_valid_lifespan_submode(submode)) {
+            std::cerr << "Error: Unknown submode '" << submode << "' for battery_lifespan." << std::endl;
+            std::cerr << "Valid submodes: 'train', 'predict'" << std::endl;
+            return 1;
+        }
+    } else if (!cli.submode.empty()) {
+        std::cerr << "Warning: --submode is ignored when mode=faultdiag (uses faultdiag.submode from JSON)."
+                  << std::endl;
+    }
+
+    const std::string config_file = cli.config_path;
+    std::cout << "Loading configuration from: " << config_file << std::endl;
+
+    json config;
+    if (!load_config(config_file, config)) {
+        return 1;
+    }
+
     std::cout << "\nRunning mode: " << mode << std::endl;
 
     // Set OpenMP threads
@@ -174,10 +168,9 @@ int main(int argc, char* argv[]) {
             std::cerr << "Error: Config missing 'battery_lifespan' section." << std::endl;
             return 1;
         }
-        std::string submode = config["battery_lifespan"].value("submode", "predict");
         std::cout << "Battery lifespan submode: " << submode << std::endl;
         tju_torch::BatteryLifespanManager manager;
-        manager.run(config["battery_lifespan"]);
+        manager.run(config["battery_lifespan"], submode);
     } else if (mode == "faultdiag") {
         if (!config.contains("faultdiag")) {
             std::cerr << "Error: Config missing 'faultdiag' section." << std::endl;
@@ -185,10 +178,6 @@ int main(int argc, char* argv[]) {
         }
         tju_torch::FaultDiagManager manager;
         manager.run(config["faultdiag"]);
-    } else {
-        std::cerr << "Error: Unknown mode '" << mode << "'" << std::endl;
-        std::cerr << "Valid modes: 'battery_lifespan', 'faultdiag'" << std::endl;
-        return 1;
     }
 
     std::cout << "\n=== Execution Completed ===" << std::endl;

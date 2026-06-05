@@ -52,6 +52,7 @@ The project name is `tju-torch` (CMake project name). It was created by `siqi` a
 │
 ├── unified_main.cpp            # Unified executable entry point
 ├── common_ffn.h                # Shared FFN, normalizers, metrics
+├── data_reader.h               # Unified txt/csv data file reader (header skip, row range)
 ├── sedm_manager.h/.cpp         # Battery lifespan manager (train + predict submodes)
 ├── faultdiag_manager.h/.cpp    # Fault diagnosis manager class
 ├── training_controller.h/.cpp  # Qt IPC control/status module
@@ -118,7 +119,7 @@ A single unified executable is produced (legacy executables are preserved in sou
 
 | Executable | Source Files | Purpose |
 |------------|--------------|---------|
-| `tju-torch` | `unified_main.cpp`, `sedm_manager.cpp`, `faultdiag_manager.cpp`, `faultDiagnosis.cpp`, `training_controller.cpp` | Unified entry point dispatching to `battery_lifespan` or `faultdiag` via JSON `mode` |
+| `tju-torch` | `unified_main.cpp`, `sedm_manager.cpp`, `faultdiag_manager.cpp`, `faultDiagnosis.cpp`, `training_controller.cpp` | Unified entry point dispatching via CLI `--mode` / `--submode` |
 
 **Legacy sources** (`prediction_model_FFN.cpp`, `predictionSEDM.cpp`, `faultDiagMain.cpp`) are kept in the repository for reference but removed from the CMake build target.
 
@@ -126,30 +127,40 @@ A single unified executable is produced (legacy executables are preserved in sou
 
 ## Runtime Architecture
 
-The unified executable `tju-torch.exe` reads a single JSON config file and dispatches to the appropriate manager class based on the top-level `mode` field.
+The unified executable `tju-torch.exe` loads `./unified_config.json` from the **current working directory** (GUI sets cwd to the case root). The run task is selected via **command-line** `mode` / `submode`; JSON retains persistent parameters only.
 
 ```powershell
-.\tju-torch.exe [config_file.json]
+cd /path/to/case
+.\tju-torch.exe --mode battery_lifespan --submode train
+.\tju-torch.exe --mode battery_lifespan --submode predict
+.\tju-torch.exe --mode faultdiag
+.\tju-torch.exe --mode battery_lifespan --submode train --config unified_config.json
 ```
 
-If no config file is provided, defaults to `unified_config.json`.
+| CLI flag | Values | Notes |
+|----------|--------|-------|
+| `--mode` / `-m` | `battery_lifespan`, `faultdiag` | CLI only; default `battery_lifespan` |
+| `--submode` / `-s` | `train`, `predict` | CLI only (lifespan); default `train` |
+| `--config` / `-c` | path | Default `./unified_config.json` relative to cwd |
 
-### 1. Battery Lifespan Mode (`"mode": "battery_lifespan"`)
+JSON does **not** contain root `mode` or `battery_lifespan.submode`. Omitted CLI flags use defaults `battery_lifespan` / `train`.
+
+### 1. Battery Lifespan Mode (`--mode battery_lifespan`)
 
 Managed by `BatteryLifespanManager` (`sedm_manager.cpp`).
 - **Submode `train`**:
-  - Trains a DDM neural network on plain-text time-series data.
+  - Trains a DDM neural network on plain-text or CSV time-series data (via `data_reader.h`).
   - Supports **AdamW** and **LBFGS** optimizers.
   - LBFGS includes automatic seed-retry (seeds 42–51) to handle divergence.
   - Iterative outer loop validates best R² on test data (compatible with old FFN training style).
-  - **Outputs**: Model `.pt`, `predictions.csv`, `training_log.csv`, `status.json`
+  - **Outputs**: Model `.pt`, `battery_predictions.csv` (`Time,YTest,YPred,Error`), `battery_training_log.csv`, `status.json`
   - **Metrics**: R², RMSE, MAE
 - **Submode `predict`**:
   - Loads a pre-trained model (path from JSON `model_path`).
   - Runs DDM neural network alongside physics-based SEDM.
   - Combines predictions: `V_hybrid = (RR * V_SEM + V_DDM) / (RR + 1)`.
-  - Computes **battery end-of-life (EOL)**: earliest intersection of predicted voltage with 80 % of maximum voltage.
-  - **Outputs**: `hybrid_predictions.csv`, `status.json`
+  - Computes **battery end-of-life (EOL)**: earliest step where hybrid voltage falls below `eol_threshold_ratio * V_max` (default 80%).
+  - **Outputs**: `battery_predictions.csv` (`Time,YTest,V_SEM,V_DDM,V_Hybrid,Error_SEM,Error_DDM,Error_Hybrid`), `status.json`
   - **Metrics**: R², RMSE, MAE, MRE for SEM / DDM / Hybrid
 - **Control**: Supports pause/resume/stop/restart via `control.json` for both submodes.
 
@@ -167,15 +178,13 @@ Managed by `FaultDiagManager` (`faultdiag_manager.cpp`).
 
 ## Configuration System
 
-The unified executable uses a single JSON configuration file. The top-level `mode` field selects the task. All file paths **must be explicitly provided** in the JSON — there are no hard-coded defaults.
+The unified executable uses `./unified_config.json` in the current working directory. **Run intent** (`mode`, lifespan `submode`) comes from the command line; JSON holds data paths, hyperparameters, and physics settings. All file paths **must be explicitly provided** in the JSON — there are no hard-coded defaults for paths.
 
 ### Unified Config Schema (`unified_config.json`)
 
 ```json
 {
-  "mode": "battery_lifespan",
   "battery_lifespan": {
-    "submode": "train",
     "input_data_path": "Data_V13_40kW.txt",
     "model_path": "battery_best_model.pt",
     "output_predictions_path": "battery_predictions.csv",
@@ -201,6 +210,8 @@ The unified executable uses a single JSON configuration file. The top-level `mod
     "training_sample_ratio": 0.5,
     "num_rows_begin": 0,
     "num_rows_end": 900,
+    "time_begin": 0.0,
+    "eol_threshold_ratio": 0.80,
     "rr": 4.0,
     "input_columns": [4, 5, 8, 10],
     "output_column": 11,
@@ -269,6 +280,8 @@ The unified executable uses a single JSON configuration file. The top-level `mod
 For fault diagnosis, `rescale_symmetric` is an alias for `minmax_neg1_1`.
 
 #### Column Selection (txt/csv modes)
+
+For `battery_lifespan` mode, input data files may be **whitespace-delimited txt** or **comma-separated csv** (auto-detected; first non-numeric line treated as header and skipped). Reading is implemented in `data_reader.h` and used via `common_ffn.h`.
 
 For `battery_lifespan` mode, the input features and output target are selected by column index (0-based) instead of hard-coded positions:
 
@@ -342,7 +355,7 @@ The core ML library lives in the `lifespanPred` namespace.
 Self-contained single-file executable. Defines:
 - `FeedForwardNet` (3-layer, sigmoid hidden)
 - `MinMaxScaler` (column-wise normalization)
-- `readDataFile()` (whitespace-delimited text parser)
+- Legacy local `readDataFile()` (whitespace txt only; **not** used by unified `tju-torch` build)
 - Training loop with optimizer dispatch
 
 ### `predictionSEDM.cpp`
@@ -448,7 +461,7 @@ The unified executable `tju-torch.exe` is designed to be controlled by a Qt desk
 // 1. Start the process
 QProcess *process = new QProcess(parent);
 process->setProgram("tju-torch.exe");
-process->setArguments({"unified_config.json"});  // or any config file
+process->setArguments({"--mode", "battery_lifespan", "--submode", "train", "--config", "unified_config.json"});
 process->start();
 
 // 2. Poll status.json periodically (e.g., every 500 ms)
@@ -576,4 +589,4 @@ All IPC file paths are **configurable via JSON** (`control_file_path`, `status_f
 - **To modify fault diagnosis CLI**: Edit `faultdiag_manager.h` and `faultdiag_manager.cpp`.
 - **To modify Qt IPC behavior**: Edit `training_controller.h` and `training_controller.cpp`.
 - **To add a new optimizer**: Update the `SequenceTrainer` constructor in `faultDiagnosis.h` and the optimizer dispatch in `sedm_manager.cpp`.
-- **To change data preprocessing**: Update `common_ffn.h` (`DataNormalizer` hierarchy) or `SequenceNormalizer` in `faultDiagnosis.h` / `faultDiagnosis.cpp`.
+- **To change data preprocessing**: Update `data_reader.h` / `common_ffn.h` (`DataNormalizer`, `readDataFile`) for battery lifespan txt/csv input, or `SequenceNormalizer` in `faultDiagnosis.h` / `faultDiagnosis.cpp` for fault diagnosis.
