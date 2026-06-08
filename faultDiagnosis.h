@@ -277,7 +277,7 @@ void SequenceTrainer<ModelType>::train(const std::vector<torch::Tensor>& train_s
     }
 
     if (controller) {
-        controller->update_status("faultdiag", "running", 0, static_cast<int>(config.max_epochs),
+        controller->update_train_status("faultdiag", "running", 0, static_cast<int>(config.max_epochs),
                                   0.0, 0.0, 0.0, 0.0, "Training started");
     }
 
@@ -287,7 +287,7 @@ void SequenceTrainer<ModelType>::train(const std::vector<torch::Tensor>& train_s
             std::string cmd = controller->read_command();
             if (cmd == "pause") {
                 controller->acknowledge_command();
-                controller->update_status("faultdiag", "paused", static_cast<int>(epoch),
+                controller->update_train_status("faultdiag", "paused", static_cast<int>(epoch),
                                           static_cast<int>(config.max_epochs), 0.0, 0.0, 0.0, 0.0,
                                           "Paused by user");
                 // Save checkpoint
@@ -298,7 +298,7 @@ void SequenceTrainer<ModelType>::train(const std::vector<torch::Tensor>& train_s
 
                 std::string resume_cmd = controller->wait_for_resume();
                 if (resume_cmd == "stop") {
-                    controller->update_status("faultdiag", "stopped", static_cast<int>(epoch),
+                    controller->update_train_status("faultdiag", "stopped", static_cast<int>(epoch),
                                               static_cast<int>(config.max_epochs), 0.0, 0.0, 0.0, 0.0,
                                               "Stopped by user");
                     return;
@@ -306,14 +306,14 @@ void SequenceTrainer<ModelType>::train(const std::vector<torch::Tensor>& train_s
                 if (resume_cmd == "restart") {
                     controller->clear_checkpoint(config.model_save_path + ".checkpoint.json",
                                                  config.model_save_path + ".checkpoint.pt");
-                    controller->update_status("faultdiag", "running", 0,
+                    controller->update_train_status("faultdiag", "running", 0,
                                               static_cast<int>(config.max_epochs), 0.0, 0.0, 0.0, 0.0,
                                               "Restarting fresh");
                     epoch = -1;
                     best_val_acc = 0.0;
                     continue;
                 }
-                controller->update_status("faultdiag", "running", static_cast<int>(epoch),
+                controller->update_train_status("faultdiag", "running", static_cast<int>(epoch),
                                           static_cast<int>(config.max_epochs), 0.0, 0.0, 0.0, 0.0,
                                           "Resumed");
             }
@@ -322,7 +322,7 @@ void SequenceTrainer<ModelType>::train(const std::vector<torch::Tensor>& train_s
                 save_model(config.model_save_path + ".checkpoint.pt");
                 nlohmann::json meta = {{"epoch", epoch}, {"best_val_acc", best_val_acc}};
                 controller->save_checkpoint_meta(config.model_save_path + ".checkpoint.json", meta);
-                controller->update_status("faultdiag", "stopped", static_cast<int>(epoch),
+                controller->update_train_status("faultdiag", "stopped", static_cast<int>(epoch),
                                           static_cast<int>(config.max_epochs), 0.0, 0.0, 0.0, 0.0,
                                           "Stopped by user");
                 return;
@@ -331,7 +331,7 @@ void SequenceTrainer<ModelType>::train(const std::vector<torch::Tensor>& train_s
                 controller->acknowledge_command();
                 controller->clear_checkpoint(config.model_save_path + ".checkpoint.json",
                                              config.model_save_path + ".checkpoint.pt");
-                controller->update_status("faultdiag", "running", 0,
+                controller->update_train_status("faultdiag", "running", 0,
                                           static_cast<int>(config.max_epochs), 0.0, 0.0, 0.0, 0.0,
                                           "Restarting fresh");
                 epoch = -1;
@@ -419,7 +419,7 @@ void SequenceTrainer<ModelType>::train(const std::vector<torch::Tensor>& train_s
 
             // Update controller status
             if (controller) {
-                controller->update_status("faultdiag", "running", static_cast<int>(epoch + 1),
+                controller->update_train_status("faultdiag", "running", static_cast<int>(epoch + 1),
                                           static_cast<int>(config.max_epochs), avg_loss, 0.0,
                                           0.0, 0.0,
                                           "Epoch " + std::to_string(epoch + 1));
@@ -429,7 +429,7 @@ void SequenceTrainer<ModelType>::train(const std::vector<torch::Tensor>& train_s
 
     std::cout << "Training completed!" << std::endl;
     if (controller) {
-        controller->update_status("faultdiag", "completed",
+        controller->update_train_status("faultdiag", "completed",
                                   static_cast<int>(config.max_epochs),
                                   static_cast<int>(config.max_epochs), 0.0,
                                   0.0, 0.0, 0.0, "Training completed");

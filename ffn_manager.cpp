@@ -128,7 +128,7 @@ void FFNManager::run(const nlohmann::json& config) {
     auto raw_data = readDataFile(data_file, num_rows_begin, num_rows_end);
     if (raw_data.empty()) {
         std::cerr << "Error: No data loaded!" << std::endl;
-        controller.update_status("ffn", "stopped", 0, epochs, 0.0, 0.0, 0.0, 0.0, "Data load failed");
+        controller.update_train_status("ffn", "stopped", 0, epochs, 0.0, 0.0, 0.0, 0.0, "Data load failed");
         return;
     }
     std::cout << "Loaded " << raw_data.size() << " rows of data." << std::endl;
@@ -270,7 +270,7 @@ void FFNManager::run(const nlohmann::json& config) {
     std::shared_ptr<FeedForwardNet> best_net = nullptr;
     double best_r2 = saved_best_r2;
 
-    controller.update_status("ffn", "running", 0, epochs, 0.0, best_r2, 0.0, 0.0,
+    controller.update_train_status("ffn", "running", 0, epochs, 0.0, best_r2, 0.0, 0.0,
                              "Training started");
 
     for (int pp = start_iteration; pp < max_iterations; ++pp) {
@@ -347,7 +347,7 @@ void FFNManager::run(const nlohmann::json& config) {
             );
         } else {
             std::cerr << "Unknown optimizer type: " << optimizer_type << std::endl;
-            controller.update_status("ffn", "stopped", 0, epochs, 0.0, best_r2, 0.0, 0.0,
+            controller.update_train_status("ffn", "stopped", 0, epochs, 0.0, best_r2, 0.0, 0.0,
                                      "Unknown optimizer");
             return;
         }
@@ -357,7 +357,7 @@ void FFNManager::run(const nlohmann::json& config) {
             std::string cmd = controller.read_command();
             if (cmd == "pause") {
                 controller.acknowledge_command();
-                controller.update_status("ffn", "paused", epoch, epochs, 0.0, best_r2, 0.0, 0.0,
+                controller.update_train_status("ffn", "paused", epoch, epochs, 0.0, best_r2, 0.0, 0.0,
                                          "Paused by user");
                 // Save checkpoint
                 torch::save(net, checkpoint_model);
@@ -373,14 +373,14 @@ void FFNManager::run(const nlohmann::json& config) {
                 std::string resume_cmd = controller.wait_for_resume();
                 if (resume_cmd == "stop") {
                     std::cout << "Stop command received. Exiting." << std::endl;
-                    controller.update_status("ffn", "stopped", epoch, epochs, 0.0, best_r2, 0.0, 0.0,
+                    controller.update_train_status("ffn", "stopped", epoch, epochs, 0.0, best_r2, 0.0, 0.0,
                                              "Stopped by user");
                     return;
                 }
                 if (resume_cmd == "restart") {
                     std::cout << "Restart command received. Clearing checkpoint and restarting." << std::endl;
                     controller.clear_checkpoint(checkpoint_meta, checkpoint_model);
-                    controller.update_status("ffn", "running", 0, epochs, 0.0, 0.0, 0.0, 0.0,
+                    controller.update_train_status("ffn", "running", 0, epochs, 0.0, 0.0, 0.0, 0.0,
                                              "Restarting fresh");
                     // Reset state
                     start_iteration = 0;
@@ -390,7 +390,7 @@ void FFNManager::run(const nlohmann::json& config) {
                     pp = -1;  // Will be incremented to 0
                     break;    // Break inner epoch loop
                 }
-                controller.update_status("ffn", "running", epoch, epochs, 0.0, best_r2, 0.0, 0.0,
+                controller.update_train_status("ffn", "running", epoch, epochs, 0.0, best_r2, 0.0, 0.0,
                                          "Resumed");
             }
             if (cmd == "stop") {
@@ -400,14 +400,14 @@ void FFNManager::run(const nlohmann::json& config) {
                                        {"hidden_layer_neurons", hidden_neurons}};
                 controller.save_checkpoint_meta(checkpoint_meta, meta);
                 std::cout << "Stop command received. Exiting." << std::endl;
-                controller.update_status("ffn", "stopped", epoch, epochs, 0.0, best_r2, 0.0, 0.0,
+                controller.update_train_status("ffn", "stopped", epoch, epochs, 0.0, best_r2, 0.0, 0.0,
                                          "Stopped by user");
                 return;
             }
             if (cmd == "restart") {
                 controller.acknowledge_command();
                 controller.clear_checkpoint(checkpoint_meta, checkpoint_model);
-                controller.update_status("ffn", "running", 0, epochs, 0.0, 0.0, 0.0, 0.0,
+                controller.update_train_status("ffn", "running", 0, epochs, 0.0, 0.0, 0.0, 0.0,
                                          "Restarting fresh");
                 start_iteration = 0;
                 start_epoch = 0;
@@ -454,7 +454,7 @@ void FFNManager::run(const nlohmann::json& config) {
 
             // Update status periodically
             if ((epoch + 1) % print_interval == 0) {
-                controller.update_status("ffn", "running", epoch + 1, epochs,
+                controller.update_train_status("ffn", "running", epoch + 1, epochs,
                                          loss.item<double>(), best_r2, 0.0, 0.0,
                                          "Iteration " + std::to_string(pp + 1));
             }
@@ -510,7 +510,7 @@ void FFNManager::run(const nlohmann::json& config) {
         std::cout << "MAE:  " << MAE << std::endl;
         std::cout << "R-squared value : " << R2 << std::endl;
 
-        controller.update_status("ffn", "running", epochs, epochs, 0.0, best_r2, RMSE, MAE,
+        controller.update_train_status("ffn", "running", epochs, epochs, 0.0, best_r2, RMSE, MAE,
                                  "Validation R2=" + std::to_string(R2));
 
         if (R2 > best_r2) {
@@ -577,7 +577,7 @@ void FFNManager::run(const nlohmann::json& config) {
         outfile.close();
         std::cout << "\nPredictions saved to " << output_predictions_path << std::endl;
 
-        controller.update_status("ffn", "completed", epochs, epochs, 0.0, R2, RMSE, MAE_val,
+        controller.update_train_status("ffn", "completed", epochs, epochs, 0.0, R2, RMSE, MAE_val,
                                  "Training completed");
     }
 

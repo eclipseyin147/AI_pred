@@ -178,6 +178,51 @@ static size_t find_closest_time_start_index(const std::vector<double>& times, do
     return best;
 }
 
+struct EolCrossingResult {
+    int index = -1;
+    double time = -1.0;
+    double voltage = 0.0;
+    double v_max = 0.0;
+    double v_threshold = 0.0;
+};
+
+static nlohmann::json eol_result_to_status_json(const EolCrossingResult& eol) {
+    nlohmann::json obj;
+    obj["detected"] = eol.index >= 0;
+    if (eol.index >= 0) {
+        obj["x"] = eol.time;
+        obj["y"] = eol.voltage;
+    } else {
+        obj["x"] = nullptr;
+        obj["y"] = nullptr;
+    }
+    return obj;
+}
+
+// First chronological time point where hybrid output <= threshold (0.8 * V_max by default).
+static EolCrossingResult find_first_eol_crossing(
+    const std::vector<double>& times,
+    const std::vector<double>& voltage,
+    double threshold_ratio) {
+    EolCrossingResult result;
+    if (times.empty() || voltage.size() != times.size()) {
+        return result;
+    }
+
+    result.v_max = *std::max_element(voltage.begin(), voltage.end());
+    result.v_threshold = threshold_ratio * result.v_max;
+
+    for (size_t i = 0; i < voltage.size(); ++i) {
+        if (voltage[i] <= result.v_threshold) {
+            result.index = static_cast<int>(i);
+            result.time = times[i];
+            result.voltage = voltage[i];
+            break;
+        }
+    }
+    return result;
+}
+
 // SEDM (Semi-Empirical Dynamic Model) function
 // Parameter declaration order matches Prediction_model_2.m; values from sedmInputParameter where configurable.
 static double SEDM(const sedmInputParameter& p, double tt, double Pc, double Pa, double T, double I) {
@@ -385,7 +430,7 @@ static double SEDM(const sedmInputParameter& p, double tt, double Pc, double Pa,
         auto raw_data = readDataFile(data_file, num_rows_begin, num_rows_end);
         if (raw_data.empty()) {
             std::cerr << "Error: No data loaded!" << std::endl;
-            controller.update_status("battery_lifespan", "stopped", 0, epochs, 0.0, 0.0, 0.0, 0.0, "Data load failed");
+            controller.update_train_status("battery_lifespan", "stopped", 0, epochs, 0.0, 0.0, 0.0, 0.0, "Data load failed");
             return;
         }
         std::cout << "Loaded " << raw_data.size() << " rows of data." << std::endl;
@@ -441,7 +486,7 @@ static double SEDM(const sedmInputParameter& p, double tt, double Pc, double Pa,
         if (input_data_rows.empty()) {
             std::cerr << "Error: No training samples created. Check input_data_path format (txt/csv), "
                       << "num_rows_begin/end, and input_columns/output_column." << std::endl;
-            controller.update_status("battery_lifespan", "stopped", 0, epochs, 0.0, 0.0, 0.0, 0.0,
+            controller.update_train_status("battery_lifespan", "stopped", 0, epochs, 0.0, 0.0, 0.0, 0.0,
                                      "No samples from data file");
             return;
         }
@@ -537,7 +582,7 @@ static double SEDM(const sedmInputParameter& p, double tt, double Pc, double Pa,
         std::shared_ptr<FeedForwardNet> best_net = nullptr;
         double best_r2 = saved_best_r2;
 
-        controller.update_status("battery_lifespan", "running", 0, epochs, 0.0, best_r2, 0.0, 0.0,
+        controller.update_train_status("battery_lifespan", "running", 0, epochs, 0.0, best_r2, 0.0, 0.0,
                                  "Training started");
 
         for (int pp = start_iteration; pp < max_iterations; ++pp) {
@@ -615,7 +660,7 @@ static double SEDM(const sedmInputParameter& p, double tt, double Pc, double Pa,
                         std::string cmd = controller.read_command();
                         if (cmd == "pause") {
                             controller.acknowledge_command();
-                            controller.update_status("battery_lifespan", "paused", epoch, epochs, 0.0, best_r2, 0.0,
+                            controller.update_train_status("battery_lifespan", "paused", epoch, epochs, 0.0, best_r2, 0.0,
                                                      0.0,
                                                      "Paused by user");
                             torch::save(net, checkpoint_model);
@@ -631,7 +676,7 @@ static double SEDM(const sedmInputParameter& p, double tt, double Pc, double Pa,
                             std::string resume_cmd = controller.wait_for_resume();
                             if (resume_cmd == "stop") {
                                 std::cout << "Stop command received. Exiting." << std::endl;
-                                controller.update_status("battery_lifespan", "stopped", epoch, epochs, 0.0, best_r2,
+                                controller.update_train_status("battery_lifespan", "stopped", epoch, epochs, 0.0, best_r2,
                                                          0.0, 0.0,
                                                          "Stopped by user");
                                 return;
@@ -640,7 +685,7 @@ static double SEDM(const sedmInputParameter& p, double tt, double Pc, double Pa,
                                 std::cout << "Restart command received. Clearing checkpoint and restarting." <<
                                         std::endl;
                                 controller.clear_checkpoint(checkpoint_meta, checkpoint_model);
-                                controller.update_status("battery_lifespan", "running", 0, epochs, 0.0, 0.0, 0.0, 0.0,
+                                controller.update_train_status("battery_lifespan", "running", 0, epochs, 0.0, 0.0, 0.0, 0.0,
                                                          "Restarting fresh");
                                 start_iteration = 0;
                                 start_epoch = 0;
@@ -649,7 +694,7 @@ static double SEDM(const sedmInputParameter& p, double tt, double Pc, double Pa,
                                 pp = -1;
                                 break;
                             }
-                            controller.update_status("battery_lifespan", "running", epoch, epochs, 0.0, best_r2, 0.0,
+                            controller.update_train_status("battery_lifespan", "running", epoch, epochs, 0.0, best_r2, 0.0,
                                                      0.0,
                                                      "Resumed");
                         }
@@ -664,7 +709,7 @@ static double SEDM(const sedmInputParameter& p, double tt, double Pc, double Pa,
                             };
                             controller.save_checkpoint_meta(checkpoint_meta, meta);
                             std::cout << "Stop command received. Exiting." << std::endl;
-                            controller.update_status("battery_lifespan", "stopped", epoch, epochs, 0.0, best_r2, 0.0,
+                            controller.update_train_status("battery_lifespan", "stopped", epoch, epochs, 0.0, best_r2, 0.0,
                                                      0.0,
                                                      "Stopped by user");
                             return;
@@ -672,7 +717,7 @@ static double SEDM(const sedmInputParameter& p, double tt, double Pc, double Pa,
                         if (cmd == "restart") {
                             controller.acknowledge_command();
                             controller.clear_checkpoint(checkpoint_meta, checkpoint_model);
-                            controller.update_status("battery_lifespan", "running", 0, epochs, 0.0, 0.0, 0.0, 0.0,
+                            controller.update_train_status("battery_lifespan", "running", 0, epochs, 0.0, 0.0, 0.0, 0.0,
                                                      "Restarting fresh");
                             start_iteration = 0;
                             start_epoch = 0;
@@ -712,7 +757,7 @@ static double SEDM(const sedmInputParameter& p, double tt, double Pc, double Pa,
                         }
 
                         if ((epoch + 1) % print_interval == 0) {
-                            controller.update_status("battery_lifespan", "running", epoch + 1, epochs,
+                            controller.update_train_status("battery_lifespan", "running", epoch + 1, epochs,
                                                      last_loss, best_r2, 0.0, 0.0,
                                                      "Iteration " + std::to_string(pp + 1) + ", seed " + std::to_string(
                                                          seed));
@@ -746,7 +791,7 @@ static double SEDM(const sedmInputParameter& p, double tt, double Pc, double Pa,
                     std::string cmd = controller.read_command();
                     if (cmd == "pause") {
                         controller.acknowledge_command();
-                        controller.update_status("battery_lifespan", "paused", epoch, epochs, 0.0, best_r2, 0.0, 0.0,
+                        controller.update_train_status("battery_lifespan", "paused", epoch, epochs, 0.0, best_r2, 0.0, 0.0,
                                                  "Paused by user");
                         torch::save(net, checkpoint_model);
                         nlohmann::json meta = {
@@ -761,7 +806,7 @@ static double SEDM(const sedmInputParameter& p, double tt, double Pc, double Pa,
                         std::string resume_cmd = controller.wait_for_resume();
                         if (resume_cmd == "stop") {
                             std::cout << "Stop command received. Exiting." << std::endl;
-                            controller.update_status("battery_lifespan", "stopped", epoch, epochs, 0.0, best_r2, 0.0,
+                            controller.update_train_status("battery_lifespan", "stopped", epoch, epochs, 0.0, best_r2, 0.0,
                                                      0.0,
                                                      "Stopped by user");
                             return;
@@ -769,7 +814,7 @@ static double SEDM(const sedmInputParameter& p, double tt, double Pc, double Pa,
                         if (resume_cmd == "restart") {
                             std::cout << "Restart command received. Clearing checkpoint and restarting." << std::endl;
                             controller.clear_checkpoint(checkpoint_meta, checkpoint_model);
-                            controller.update_status("battery_lifespan", "running", 0, epochs, 0.0, 0.0, 0.0, 0.0,
+                            controller.update_train_status("battery_lifespan", "running", 0, epochs, 0.0, 0.0, 0.0, 0.0,
                                                      "Restarting fresh");
                             start_iteration = 0;
                             start_epoch = 0;
@@ -778,7 +823,7 @@ static double SEDM(const sedmInputParameter& p, double tt, double Pc, double Pa,
                             pp = -1;
                             break;
                         }
-                        controller.update_status("battery_lifespan", "running", epoch, epochs, 0.0, best_r2, 0.0, 0.0,
+                        controller.update_train_status("battery_lifespan", "running", epoch, epochs, 0.0, best_r2, 0.0, 0.0,
                                                  "Resumed");
                     }
                     if (cmd == "stop") {
@@ -792,14 +837,14 @@ static double SEDM(const sedmInputParameter& p, double tt, double Pc, double Pa,
                         };
                         controller.save_checkpoint_meta(checkpoint_meta, meta);
                         std::cout << "Stop command received. Exiting." << std::endl;
-                        controller.update_status("battery_lifespan", "stopped", epoch, epochs, 0.0, best_r2, 0.0, 0.0,
+                        controller.update_train_status("battery_lifespan", "stopped", epoch, epochs, 0.0, best_r2, 0.0, 0.0,
                                                  "Stopped by user");
                         return;
                     }
                     if (cmd == "restart") {
                         controller.acknowledge_command();
                         controller.clear_checkpoint(checkpoint_meta, checkpoint_model);
-                        controller.update_status("battery_lifespan", "running", 0, epochs, 0.0, 0.0, 0.0, 0.0,
+                        controller.update_train_status("battery_lifespan", "running", 0, epochs, 0.0, 0.0, 0.0, 0.0,
                                                  "Restarting fresh");
                         start_iteration = 0;
                         start_epoch = 0;
@@ -843,7 +888,7 @@ static double SEDM(const sedmInputParameter& p, double tt, double Pc, double Pa,
                     }
 
                     if ((epoch + 1) % print_interval == 0) {
-                        controller.update_status("battery_lifespan", "running", epoch + 1, epochs,
+                        controller.update_train_status("battery_lifespan", "running", epoch + 1, epochs,
                                                  loss_val, best_r2, 0.0, 0.0,
                                                  "Training iteration " + std::to_string(pp + 1));
                     }
@@ -856,7 +901,7 @@ static double SEDM(const sedmInputParameter& p, double tt, double Pc, double Pa,
                 }
             } else {
                 std::cerr << "Unknown optimizer type: " << optimizer_type << std::endl;
-                controller.update_status("battery_lifespan", "stopped", 0, epochs, 0.0, best_r2, 0.0, 0.0,
+                controller.update_train_status("battery_lifespan", "stopped", 0, epochs, 0.0, best_r2, 0.0, 0.0,
                                          "Unknown optimizer");
                 return;
             }
@@ -875,7 +920,7 @@ static double SEDM(const sedmInputParameter& p, double tt, double Pc, double Pa,
 
             if (!training_success) {
                 std::cerr << "Error: Training failed after multiple retries. All seeds produced NaN/Inf." << std::endl;
-                controller.update_status("battery_lifespan", "stopped", 0, epochs, 0.0, 0.0, 0.0, 0.0,
+                controller.update_train_status("battery_lifespan", "stopped", 0, epochs, 0.0, 0.0, 0.0, 0.0,
                                          "Training failed - NaN");
                 return;
             }
@@ -922,7 +967,7 @@ static double SEDM(const sedmInputParameter& p, double tt, double Pc, double Pa,
             std::cout << "MAE:  " << MAE << std::endl;
             std::cout << "R-squared value : " << R2 << std::endl;
 
-            controller.update_status("battery_lifespan", "running", epochs, epochs, 0.0, best_r2, RMSE, MAE,
+            controller.update_train_status("battery_lifespan", "running", epochs, epochs, 0.0, best_r2, RMSE, MAE,
                                      "Validation R2=" + std::to_string(R2));
 
             if (R2 > best_r2) {
@@ -991,7 +1036,7 @@ static double SEDM(const sedmInputParameter& p, double tt, double Pc, double Pa,
             outfile.close();
             std::cout << "\nPredictions saved to " << output_predictions_path << std::endl;
 
-            controller.update_status("battery_lifespan", "completed", epochs, epochs, 0.0, R2, RMSE, MAE_val,
+            controller.update_train_status("battery_lifespan", "completed", epochs, epochs, 0.0, R2, RMSE, MAE_val,
                                      "Training completed");
         }
 
@@ -1096,7 +1141,7 @@ static double SEDM(const sedmInputParameter& p, double tt, double Pc, double Pa,
         auto raw_data = readDataFile(data_file, 0, -1);
         if (raw_data.empty()) {
             std::cerr << "Error: No data loaded!" << std::endl;
-            controller.update_status("battery_lifespan", "stopped", 0, 0, 0.0, 0.0, 0.0, 0.0, "Data load failed");
+            controller.update_predict_status("battery_lifespan", "stopped", "Data load failed");
             return;
         }
         std::cout << "Loaded " << raw_data.size() << " rows of data." << std::endl;
@@ -1117,8 +1162,7 @@ static double SEDM(const sedmInputParameter& p, double tt, double Pc, double Pa,
         if (input_data_rows.empty()) {
             std::cerr << "Error: No prediction samples created. Check input_data_path format (txt/csv) "
                       << "and input_columns/output_column." << std::endl;
-            controller.update_status("battery_lifespan", "stopped", 0, 0, 0.0, 0.0, 0.0, 0.0,
-                                     "No samples from data file");
+            controller.update_predict_status("battery_lifespan", "stopped", "No samples from data file");
             return;
         }
 
@@ -1142,8 +1186,7 @@ static double SEDM(const sedmInputParameter& p, double tt, double Pc, double Pa,
         if (norm_num_samples <= 0) {
             std::cerr << "Error: No training-range samples for normalization. Check num_rows_begin/end."
                       << std::endl;
-            controller.update_status("battery_lifespan", "stopped", 0, 0, 0.0, 0.0, 0.0, 0.0,
-                                     "No norm samples");
+            controller.update_predict_status("battery_lifespan", "stopped", "No norm samples");
             return;
         }
 
@@ -1180,7 +1223,7 @@ static double SEDM(const sedmInputParameter& p, double tt, double Pc, double Pa,
         } catch (...) {
             std::cerr << "Error: Could not load pre-trained model from " << model_path << std::endl;
             std::cerr << "Please run train submode first." << std::endl;
-            controller.update_status("battery_lifespan", "stopped", 0, 0, 0.0, 0.0, 0.0, 0.0, "Model load failed");
+            controller.update_predict_status("battery_lifespan", "stopped", "Model load failed");
             return;
         }
 
@@ -1212,8 +1255,7 @@ static double SEDM(const sedmInputParameter& p, double tt, double Pc, double Pa,
         const int dataset_row_size = static_cast<int>(input_columns.size()) + 1;
         const int update_idx = dataset_row_size * w - dataset_row_size - 1;
 
-        controller.update_status("battery_lifespan", "running", 0, 0, 0.0, 0.0, 0.0, 0.0,
-                                 "Hybrid prediction in progress");
+        controller.update_predict_status("battery_lifespan", "running", "Hybrid prediction in progress");
 
         for (int n = 0; n < num_samples; ++n) {
             if ((n + 1) % 50 == 0) {
@@ -1221,8 +1263,7 @@ static double SEDM(const sedmInputParameter& p, double tt, double Pc, double Pa,
                 std::string cmd = controller.read_command();
                 if (cmd == "stop") {
                     controller.acknowledge_command();
-                    controller.update_status("battery_lifespan", "stopped", 0, 0, 0.0, 0.0, 0.0, 0.0,
-                                             "Stopped during prediction");
+                    controller.update_predict_status("battery_lifespan", "stopped", "Stopped during prediction");
                     return;
                 }
             }
@@ -1284,45 +1325,37 @@ static double SEDM(const sedmInputParameter& p, double tt, double Pc, double Pa,
 
         if (YTest_vec.empty()) {
             std::cerr << "Error: No prediction rows after time_begin alignment." << std::endl;
-            controller.update_status("battery_lifespan", "stopped", 0, 0, 0.0, 0.0, 0.0, 0.0,
-                                     "No rows after time_begin alignment");
+            controller.update_predict_status("battery_lifespan", "stopped",
+                                             "No rows after time_begin alignment");
             return;
         }
 
-        // Battery End-of-Life (EOL) estimation on output range
+        // Battery End-of-Life (EOL): first time point on full hybrid curve where V <= threshold.
         std::cout << "\n=== Battery End-of-Life (EOL) Estimate ===" << std::endl;
-        double V_max = *std::max_element(aV_hybrid.begin(), aV_hybrid.end());
-        double V_threshold = eol_threshold_ratio * V_max;
-        int eol_index = -1;
-        for (size_t i = 0; i < aV_hybrid.size(); ++i) {
-            if (aV_hybrid[i] <= V_threshold) {
-                eol_index = static_cast<int>(i);
-                break;
-            }
-        }
+        const EolCrossingResult eol = find_first_eol_crossing(
+            all_times, all_v_hybrid, eol_threshold_ratio);
 
-        double eol_time = -1.0;
         double real_lifetime = -1.0;
         std::string eol_message;
-        if (eol_index >= 0) {
-            eol_time = out_times[static_cast<size_t>(eol_index)];
-            real_lifetime = eol_time - time_begin;
-            eol_message = "EOL at step " + std::to_string(eol_index) +
-                          " (time=" + std::to_string(eol_time) + "h, real_lifetime=" + std::to_string(real_lifetime) +
-                          "h, V=" + std::to_string(aV_hybrid[static_cast<size_t>(eol_index)]) + ")";
-            std::cout << "Max predicted voltage: " << V_max << std::endl;
-            std::cout << eol_threshold_ratio * 100.0 << "% threshold: " << V_threshold << std::endl;
-            std::cout << "EOL occurs at output step " << eol_index
-                      << " (time = " << eol_time << " h)" << std::endl;
+        if (eol.index >= 0) {
+            real_lifetime = eol.time - time_begin;
+            eol_message = "EOL at time=" + std::to_string(eol.time) + "h (index=" +
+                          std::to_string(eol.index) + ", V=" + std::to_string(eol.voltage) +
+                          ", real_lifetime=" + std::to_string(real_lifetime) + "h)";
+            std::cout << "Max predicted voltage (V_max): " << eol.v_max << std::endl;
+            std::cout << eol_threshold_ratio * 100.0 << "% threshold: " << eol.v_threshold << std::endl;
+            std::cout << "First time point with V_Hybrid <= threshold: "
+                      << eol.time << " h (step " << eol.index
+                      << ", V=" << eol.voltage << ")" << std::endl;
             if (time_begin > 0.0 && real_lifetime >= 0.0) {
-                std::cout << "Real lifetime (after subtracting time_begin=" << time_begin << "): "
+                std::cout << "Real lifetime (eol_time - time_begin=" << time_begin << "): "
                           << real_lifetime << " h" << std::endl;
             }
         } else {
             eol_message = "No EOL crossing detected within prediction horizon";
-            std::cout << "Max predicted voltage: " << V_max << std::endl;
-            std::cout << eol_threshold_ratio * 100.0 << "% threshold: " << V_threshold << std::endl;
-            std::cout << "No EOL crossing detected within prediction horizon." << std::endl;
+            std::cout << "Max predicted voltage (V_max): " << eol.v_max << std::endl;
+            std::cout << eol_threshold_ratio * 100.0 << "% threshold: " << eol.v_threshold << std::endl;
+            std::cout << "No time point with V_Hybrid <= threshold within prediction horizon." << std::endl;
         }
 
         std::ofstream outfile(output_predictions_path);
@@ -1341,7 +1374,8 @@ static double SEDM(const sedmInputParameter& p, double tt, double Pc, double Pa,
         std::cout << "\nResults saved to " << output_predictions_path
                   << " (" << YTest_vec.size() << " rows, from Time=" << matched_time << ")" << std::endl;
 
-        controller.update_status("battery_lifespan", "completed", 0, 0, 0.0, 0.0, 0.0, 0.0, eol_message);
+        const nlohmann::json eol_status = eol_result_to_status_json(eol);
+        controller.update_predict_status("battery_lifespan", "completed", eol_message, &eol_status);
 
         std::cout << "\nHybrid prediction completed!" << std::endl;
     }

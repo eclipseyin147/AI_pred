@@ -159,7 +159,7 @@ Managed by `BatteryLifespanManager` (`sedm_manager.cpp`).
   - Loads a pre-trained model (path from JSON `model_path`).
   - Runs DDM neural network alongside physics-based SEDM.
   - Combines predictions: `V_hybrid = (RR * V_SEM + V_DDM) / (RR + 1)`.
-  - Computes **battery end-of-life (EOL)**: earliest step where hybrid voltage falls below `eol_threshold_ratio * V_max` (default 80%).
+  - Computes **battery end-of-life (EOL)**: first time point on the full hybrid curve where `V_Hybrid <= eol_threshold_ratio * V_max` (default 80%).
   - **Outputs**: `battery_predictions.csv` (`Time,YTest,V_SEM,V_DDM,V_Hybrid,Error_SEM,Error_DDM,Error_Hybrid`), `status.json`
   - **Metrics**: EOL estimate only (R²/RMSE/MAE are printed during `train` validation, not in `predict`)
 - **Control**: Supports pause/resume/stop/restart via `control.json` for both submodes.
@@ -294,7 +294,7 @@ For `battery_lifespan` mode, the input features and output target are selected b
 | `num_rows_begin` | `int` | `battery_lifespan` | First numeric data row to read, **1-based inclusive** (matches GUI row numbers; header lines are not counted). Values `<= 0` are treated as `1`. |
 | `num_rows_end` | `int` | `battery_lifespan` | Last numeric data row to read, **1-based inclusive**. Use `-1` or `<= 0` to read through the last data row. |
 | `time_begin` | `double` | `battery_lifespan` | Starting time offset (in hours) written by the GUI. When calculating EOL, this value is subtracted from the absolute time to obtain the real lifetime. Default is `0.0`. |
-| `eol_threshold_ratio` | `double` | `battery_lifespan` | Ratio of maximum predicted voltage used as the EOL threshold. EOL is detected when predicted voltage falls below `eol_threshold_ratio * V_max`. Default is `0.80`.
+| `eol_threshold_ratio` | `double` | `battery_lifespan` | Ratio of maximum predicted hybrid voltage used as the EOL threshold. `V_max` is taken from the full prediction curve; EOL is the **first** time point where `V_Hybrid <= eol_threshold_ratio * V_max`. Default is `0.80`.
 
 > **Backward compatibility**: The legacy `num_rows` field is still supported. If `num_rows_begin`/`num_rows_end` are not present but `num_rows` is, the behavior defaults to `num_rows_begin=1` and `num_rows_end=num_rows` (first `num_rows` data rows). A legacy `num_rows_begin` of `0` is treated as `1`.
 
@@ -475,17 +475,28 @@ connect(timer, &QTimer::timeout, [=]() {
 
     QJsonDocument doc = QJsonDocument::fromJson(data);
     QJsonObject status = doc.object();
-
-    int epoch = status["epoch"].toInt();
-    int total = status["total_epochs"].toInt();
-    QString state = status["state"].toString();  // "running", "paused", "stopped", "completed"
-    double loss = status["loss"].toDouble();
-    double r2   = status["best_r2"].toDouble();
-    double rmse = status["rmse"].toDouble();
-    double mae  = status["mae"].toDouble();
+    QString submode = status["submode"].toString();  // "train" | "predict"
+    QString state = status["state"].toString();
     QString msg = status["message"].toString();
 
-    // Update UI progress bars, labels, etc.
+    if (submode == "train" && status.contains("train")) {
+        QJsonObject train = status["train"].toObject();
+        int epoch = train["epoch"].toInt();
+        int total = train["total_epochs"].toInt();
+        double r2 = train["best_r2"].toDouble();
+        // Update training progress UI...
+    }
+    if (status.contains("predict")) {
+        QJsonObject predict = status["predict"].toObject();
+        if (predict.contains("eol")) {
+            QJsonObject eol = predict["eol"].toObject();
+            if (eol["detected"].toBool()) {
+                double x = eol["x"].toDouble();
+                double y = eol["y"].toDouble();
+                // Mark EOL point on chart...
+            }
+        }
+    }
 });
 timer->start(500);
 ```
@@ -527,17 +538,29 @@ void MainWindow::onPauseClicked() {
 
 The executable writes its current state after every epoch (and immediately upon state changes). Qt should read this file periodically.
 
+Status updates **merge** into the existing file by task block: `train` and `predict` are updated independently so one run does not wipe the other.
+
 ```json
 {
   "mode": "battery_lifespan",
-  "state": "running",
-  "epoch": 150,
-  "total_epochs": 1000,
-  "loss": 0.00123,
-  "best_r2": 0.92,
-  "rmse": 0.045,
-  "mae": 0.032,
-  "message": "Training iteration 2, epoch 150",
+  "state": "completed",
+  "submode": "predict",
+  "message": "EOL at time=512.5h (...)",
+  "train": {
+    "epoch": 60,
+    "total_epochs": 60,
+    "loss": 0.0,
+    "best_r2": 0.92,
+    "rmse": 0.04,
+    "mae": 0.03
+  },
+  "predict": {
+    "eol": {
+      "detected": true,
+      "x": 512.5,
+      "y": 155.2
+    }
+  },
   "timestamp_ms": 1715432101000
 }
 ```
@@ -546,14 +569,30 @@ The executable writes its current state after every epoch (and immediately upon 
 |-------|------|-------------|
 | `mode` | string | `"battery_lifespan"` or `"faultdiag"` |
 | `state` | string | `"idle"`, `"running"`, `"paused"`, `"stopped"`, `"completed"` |
-| `epoch` | int | Current epoch number |
+| `submode` | string | Last active task: `"train"` or `"predict"` (`battery_lifespan` only) |
+| `message` | string | Human-readable status for the current update |
+| `train` | object | Training metrics; updated only by **train** / **faultdiag** runs |
+| `predict` | object | Prediction results; updated only when **predict** completes (with `eol`) |
+| `timestamp_ms` | int64 | Monotonic timestamp for freshness check |
+
+#### `train` object
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `epoch` | int | Current epoch |
 | `total_epochs` | int | Total epochs configured |
 | `loss` | double | Current training loss |
-| `best_r2` | double | Best R² achieved so far (`battery_lifespan` train) |
-| `rmse` | double | Current RMSE |
-| `mae` | double | Current MAE |
-| `message` | string | Human-readable status message |
-| `timestamp_ms` | int64 | Monotonic timestamp for freshness check |
+| `best_r2` | double | Best R² (`battery_lifespan` train) |
+| `rmse` | double | RMSE |
+| `mae` | double | MAE |
+
+#### `predict.eol` object (`battery_lifespan` predict only)
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `detected` | bool | `true` if EOL crossing was found on the hybrid curve |
+| `x` | double \| null | Abscissa: time (hours), same as CSV `Time` |
+| `y` | double \| null | Ordinate: `V_Hybrid` at the crossing |
 
 ### Checkpoint System
 
