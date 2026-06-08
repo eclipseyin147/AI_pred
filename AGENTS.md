@@ -161,7 +161,7 @@ Managed by `BatteryLifespanManager` (`sedm_manager.cpp`).
   - Combines predictions: `V_hybrid = (RR * V_SEM + V_DDM) / (RR + 1)`.
   - Computes **battery end-of-life (EOL)**: earliest step where hybrid voltage falls below `eol_threshold_ratio * V_max` (default 80%).
   - **Outputs**: `battery_predictions.csv` (`Time,YTest,V_SEM,V_DDM,V_Hybrid,Error_SEM,Error_DDM,Error_Hybrid`), `status.json`
-  - **Metrics**: R², RMSE, MAE, MRE for SEM / DDM / Hybrid
+  - **Metrics**: EOL estimate only (R²/RMSE/MAE are printed during `train` validation, not in `predict`)
 - **Control**: Supports pause/resume/stop/restart via `control.json` for both submodes.
 
 ### 3. FaultDiag Mode (`"mode": "faultdiag"`)
@@ -208,7 +208,7 @@ The unified executable uses `./unified_config.json` in the current working direc
     "print_interval": 200,
     "window_size": 5,
     "training_sample_ratio": 0.5,
-    "num_rows_begin": 0,
+    "num_rows_begin": 1,
     "num_rows_end": 900,
     "time_begin": 0.0,
     "eol_threshold_ratio": 0.80,
@@ -291,11 +291,12 @@ For `battery_lifespan` mode, the input features and output target are selected b
 | `output_column` | `int` | `battery_lifespan` | 0-based column index to use as the prediction target |
 | `time_column` | `int` | `battery_lifespan` | 0-based column index for the time variable used by the SEDM physics model |
 
-| `num_rows_end` | `int` | `battery_lifespan` | Ending row index (exclusive) to read from the text data file. Use `-1` or omit to read until end. |
+| `num_rows_begin` | `int` | `battery_lifespan` | First numeric data row to read, **1-based inclusive** (matches GUI row numbers; header lines are not counted). Values `<= 0` are treated as `1`. |
+| `num_rows_end` | `int` | `battery_lifespan` | Last numeric data row to read, **1-based inclusive**. Use `-1` or `<= 0` to read through the last data row. |
 | `time_begin` | `double` | `battery_lifespan` | Starting time offset (in hours) written by the GUI. When calculating EOL, this value is subtracted from the absolute time to obtain the real lifetime. Default is `0.0`. |
 | `eol_threshold_ratio` | `double` | `battery_lifespan` | Ratio of maximum predicted voltage used as the EOL threshold. EOL is detected when predicted voltage falls below `eol_threshold_ratio * V_max`. Default is `0.80`.
 
-> **Backward compatibility**: The legacy `num_rows` field is still supported. If `num_rows_begin`/`num_rows_end` are not present but `num_rows` is, the behavior defaults to `num_rows_begin=0` and `num_rows_end=num_rows`.
+> **Backward compatibility**: The legacy `num_rows` field is still supported. If `num_rows_begin`/`num_rows_end` are not present but `num_rows` is, the behavior defaults to `num_rows_begin=1` and `num_rows_end=num_rows` (first `num_rows` data rows). A legacy `num_rows_begin` of `0` is treated as `1`.
 
 If these fields are omitted, the defaults match the original hard-coded behavior:
 - `input_columns`: `[4, 5, 8, 10]`

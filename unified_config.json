@@ -39,7 +39,7 @@
     "print_interval": 10,
     "window_size": 5,
     "training_sample_ratio": 0.5,
-    "num_rows_begin": 0,
+    "num_rows_begin": 1,
     "num_rows_end": 900,
     "time_begin": 0.0,
     "eol_threshold_ratio": 0.80,

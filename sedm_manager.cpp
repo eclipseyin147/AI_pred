@@ -79,6 +79,105 @@ static double time_for_sample(const std::vector<double>& row_times, int sample_i
     return 0.0;
 }
 
+struct LifespanWindowData {
+    std::vector<double> tt, Pa, Pc, T, I;
+    std::vector<std::vector<double>> input_data_rows;
+    std::vector<double> output_data_vec;
+};
+
+static LifespanWindowData build_lifespan_window_data(
+        const std::vector<std::vector<double>>& raw_data,
+        const std::vector<int>& input_columns,
+        int output_column,
+        int time_column,
+        int window_size,
+        int min_cols) {
+    LifespanWindowData result;
+    const int w = window_size;
+
+    std::vector<std::vector<double>> input_rows;
+    std::vector<std::vector<double>> output_rows;
+    for (const auto& row : raw_data) {
+        if (row.size() >= static_cast<size_t>(min_cols)) {
+            if (input_columns.size() >= 4) {
+                result.tt.push_back(row[time_column]);
+                result.Pa.push_back(row[input_columns[1]]);
+                result.Pc.push_back(row[input_columns[0]]);
+                result.T.push_back(row[input_columns[2]] + 273.15);
+                result.I.push_back(row[input_columns[3]]);
+            }
+            std::vector<double> in_row;
+            for (int col : input_columns) {
+                in_row.push_back(row[col]);
+            }
+            input_rows.push_back(in_row);
+            output_rows.push_back({row[output_column]});
+        }
+    }
+
+    std::vector<std::vector<double>> dataset;
+    for (size_t i = 0; i < input_rows.size(); ++i) {
+        std::vector<double> row = input_rows[i];
+        row.push_back(output_rows[i][0]);
+        dataset.push_back(row);
+    }
+
+    for (size_t i = 0; i + static_cast<size_t>(w) <= dataset.size(); ++i) {
+        std::vector<double> input_pre;
+        for (int j = 0; j < w; ++j) {
+            const size_t idx = i + static_cast<size_t>(j);
+            for (double val : dataset[idx]) {
+                input_pre.push_back(val);
+            }
+        }
+        if (!input_pre.empty()) {
+            result.output_data_vec.push_back(input_pre.back());
+            input_pre.pop_back();
+            result.input_data_rows.push_back(input_pre);
+        }
+    }
+    return result;
+}
+
+static int training_split_count(int num_samples, const nlohmann::json& config) {
+    int numTimeStepsTrain = 300;
+    if (config.contains("training_sample_ratio")) {
+        const double ratio = config.value("training_sample_ratio", 0.5);
+        numTimeStepsTrain = static_cast<int>(std::round(ratio * num_samples));
+    } else if (config.contains("train_samples")) {
+        numTimeStepsTrain = config.value("train_samples", 300);
+    }
+    if (numTimeStepsTrain <= 0) {
+        numTimeStepsTrain = 1;
+    }
+    if (numTimeStepsTrain > num_samples) {
+        numTimeStepsTrain = num_samples;
+    }
+    return numTimeStepsTrain;
+}
+
+static size_t find_closest_time_start_index(const std::vector<double>& times, double time_begin) {
+    if (times.empty()) {
+        return 0;
+    }
+    size_t best = 0;
+    double best_dist = std::abs(times[0] - time_begin);
+    for (size_t i = 1; i < times.size(); ++i) {
+        const double dist = std::abs(times[i] - time_begin);
+        if (dist < best_dist) {
+            best = i;
+            best_dist = dist;
+        } else if (dist == best_dist) {
+            const bool cur_ge = times[i] >= time_begin;
+            const bool best_ge = times[best] >= time_begin;
+            if (cur_ge && !best_ge) {
+                best = i;
+            }
+        }
+    }
+    return best;
+}
+
 // SEDM (Semi-Empirical Dynamic Model) function
 // Parameter declaration order matches Prediction_model_2.m; values from sedmInputParameter where configurable.
 static double SEDM(const sedmInputParameter& p, double tt, double Pc, double Pa, double T, double I) {
@@ -934,14 +1033,6 @@ static double SEDM(const sedmInputParameter& p, double tt, double Pc, double Pa,
         std::string control_file = config["control_file_path"];
         std::string status_file = config["status_file_path"];
 
-        int num_rows_begin = 0;
-        int num_rows_end = -1;
-        if (config.contains("num_rows_begin") || config.contains("num_rows_end")) {
-            num_rows_begin = config.value("num_rows_begin", 0);
-            num_rows_end = config.value("num_rows_end", -1);
-        } else if (config.contains("num_rows")) {
-            num_rows_end = config.value("num_rows", 900);
-        }
         int window_size = config.value("window_size", 5);
         double RR = config.value("rr", 4.0);
         double time_begin = config.value("time_begin", 0.0);
@@ -1000,9 +1091,9 @@ static double SEDM(const sedmInputParameter& p, double tt, double Pc, double Pa,
             std::cout << "CUDA not available. Using CPU with OpenMP acceleration." << std::endl;
         }
 
-        // Load data
-        std::cout << "\nLoading data from " << data_file << "..." << std::endl;
-        auto raw_data = readDataFile(data_file, num_rows_begin, num_rows_end);
+        // Load entire input file for prediction (num_rows_begin/end apply to train only)
+        std::cout << "\nLoading full data from " << data_file << "..." << std::endl;
+        auto raw_data = readDataFile(data_file, 0, -1);
         if (raw_data.empty()) {
             std::cerr << "Error: No data loaded!" << std::endl;
             controller.update_status("battery_lifespan", "stopped", 0, 0, 0.0, 0.0, 0.0, 0.0, "Data load failed");
@@ -1011,117 +1102,68 @@ static double SEDM(const sedmInputParameter& p, double tt, double Pc, double Pa,
         std::cout << "Loaded " << raw_data.size() << " rows of data." << std::endl;
 
         const int w = window_size;
-        const size_t dd = raw_data.size();
-
-        // Extract raw experimental data for SEDM physics model
-        std::vector<double> tt, Pa, Pc, T, I, V_cell_exp;
-        for (const auto &row: raw_data) {
-            if (row.size() >= static_cast<size_t>(min_cols) && input_columns.size() >= 4) {
-                tt.push_back(row[time_column]);
-                Pa.push_back(row[input_columns[1]]);
-                Pc.push_back(row[input_columns[0]]);
-                T.push_back(row[input_columns[2]] + 273.15);
-                I.push_back(row[input_columns[3]]);
-                V_cell_exp.push_back(row[output_column] / static_cast<double>(input_params.nn));
-            }
-        }
-
-        // Prepare Input and Output for neural network
-        std::vector<std::vector<double> > Input, Output;
-        for (const auto &row: raw_data) {
-            if (row.size() >= static_cast<size_t>(min_cols)) {
-                std::vector<double> in_row;
-                for (int col: input_columns) {
-                    in_row.push_back(row[col]);
-                }
-                Input.push_back(in_row);
-                Output.push_back({row[output_column]});
-            }
-        }
-
-        std::vector<std::vector<double> > Dataset;
-        for (size_t i = 0; i < Input.size(); ++i) {
-            std::vector<double> row = Input[i];
-            row.push_back(Output[i][0]);
-            Dataset.push_back(row);
-        }
-
-        // Apply sliding window
-        std::vector<std::vector<double> > input_data_rows;
-        std::vector<double> output_data_vec;
-
-        for (size_t i = 0; i < dd - w; ++i) {
-            std::vector<double> Input_pre;
-            for (int j = 0; j < w; ++j) {
-                size_t idx = i + j;
-                if (idx < Dataset.size()) {
-                    for (double val: Dataset[idx]) {
-                        Input_pre.push_back(val);
-                    }
-                }
-            }
-            if (!Input_pre.empty()) {
-                output_data_vec.push_back(Input_pre.back());
-                Input_pre.pop_back();
-                input_data_rows.push_back(Input_pre);
-            }
-        }
+        LifespanWindowData window_data = build_lifespan_window_data(
+            raw_data, input_columns, output_column, time_column, w, min_cols);
+        const auto& tt = window_data.tt;
+        const auto& Pc = window_data.Pc;
+        const auto& Pa = window_data.Pa;
+        const auto& T = window_data.T;
+        const auto& I = window_data.I;
+        const auto& input_data_rows = window_data.input_data_rows;
+        const auto& output_data_vec = window_data.output_data_vec;
 
         std::cout << "Created " << input_data_rows.size() << " samples with sliding window." << std::endl;
 
         if (input_data_rows.empty()) {
-            std::cerr << "Error: No prediction samples created. Check input_data_path format (txt/csv), "
-                      << "num_rows_begin/end, and input_columns/output_column." << std::endl;
+            std::cerr << "Error: No prediction samples created. Check input_data_path format (txt/csv) "
+                      << "and input_columns/output_column." << std::endl;
             controller.update_status("battery_lifespan", "stopped", 0, 0, 0.0, 0.0, 0.0, 0.0,
                                      "No samples from data file");
             return;
         }
 
-        int num_samples = static_cast<int>(input_data_rows.size());
-        int num_features = static_cast<int>(input_data_rows[0].size());
+        const int num_samples = static_cast<int>(input_data_rows.size());
+        const int num_features = static_cast<int>(input_data_rows[0].size());
 
-        int numTimeStepsTrain = 300;
-        if (config.contains("training_sample_ratio")) {
-            double ratio = config.value("training_sample_ratio", 0.5);
-            numTimeStepsTrain = static_cast<int>(std::round(ratio * num_samples));
-        } else if (config.contains("train_samples")) {
-            numTimeStepsTrain = config.value("train_samples", 300);
+        // Normalizer fit must match train: use train row range + training_sample_ratio
+        int norm_rows_begin = 0;
+        int norm_rows_end = -1;
+        if (config.contains("num_rows_begin") || config.contains("num_rows_end")) {
+            norm_rows_begin = config.value("num_rows_begin", 0);
+            norm_rows_end = config.value("num_rows_end", -1);
+        } else if (config.contains("num_rows")) {
+            norm_rows_end = config.value("num_rows", 900);
         }
-        if (numTimeStepsTrain <= 0) numTimeStepsTrain = 1;
-        if (numTimeStepsTrain > num_samples) numTimeStepsTrain = num_samples;
 
-        int num_test = num_samples - numTimeStepsTrain;
+        auto norm_raw_data = readDataFile(data_file, norm_rows_begin, norm_rows_end);
+        LifespanWindowData norm_window_data = build_lifespan_window_data(
+            norm_raw_data, input_columns, output_column, time_column, w, min_cols);
+        const int norm_num_samples = static_cast<int>(norm_window_data.input_data_rows.size());
+        if (norm_num_samples <= 0) {
+            std::cerr << "Error: No training-range samples for normalization. Check num_rows_begin/end."
+                      << std::endl;
+            controller.update_status("battery_lifespan", "stopped", 0, 0, 0.0, 0.0, 0.0, 0.0,
+                                     "No norm samples");
+            return;
+        }
 
+        const int numTimeStepsTrain = training_split_count(norm_num_samples, config);
         torch::Tensor input_train = torch::zeros({num_features, numTimeStepsTrain});
         torch::Tensor output_train = torch::zeros({numTimeStepsTrain});
-
-        int train_limit = std::min(numTimeStepsTrain, num_samples);
-        for (int i = 0; i < train_limit; ++i) {
+        for (int i = 0; i < numTimeStepsTrain; ++i) {
             for (int j = 0; j < num_features; ++j) {
-                input_train[j][i] = input_data_rows[i][j];
+                input_train[j][i] = norm_window_data.input_data_rows[static_cast<size_t>(i)][j];
             }
-            output_train[i] = output_data_vec[i];
+            output_train[i] = norm_window_data.output_data_vec[static_cast<size_t>(i)];
         }
-
-        torch::Tensor input_test = torch::zeros({num_features, num_test});
-        torch::Tensor output_test = torch::zeros({num_test});
-
-        for (int i = 0; i < num_test; ++i) {
-            for (int j = 0; j < num_features; ++j) {
-                input_test[j][i] = input_data_rows[train_limit + i][j];
-            }
-            output_test[i] = output_data_vec[train_limit + i];
-        }
-
         input_train = input_train.to(device);
         output_train = output_train.to(device);
-        input_test = input_test.to(device);
-        output_test = output_test.to(device);
 
-        std::cout << "Train samples: " << numTimeStepsTrain << std::endl;
-        std::cout << "Test samples: " << num_test << std::endl;
+        std::cout << "Normalization fit samples: " << numTimeStepsTrain
+                  << " (from train row range)" << std::endl;
+        std::cout << "Prediction samples: " << num_samples << " (full file)" << std::endl;
+        std::cout << "Output time anchor: time_begin=" << time_begin << " (nearest Time in data)" << std::endl;
 
-        // Normalize data
         auto normalizer = create_normalizer(norm_method);
         normalizer->fit(input_train, output_train);
 
@@ -1132,11 +1174,9 @@ static double SEDM(const sedmInputParameter& p, double tt, double Pc, double Pa,
         auto net = std::make_shared<FeedForwardNet>(num_features, hidden_neurons, 1);
         net->to(device);
 
-        bool model_loaded = false;
         try {
             torch::load(net, model_path);
             std::cout << "Loaded pre-trained model from " << model_path << std::endl;
-            model_loaded = true;
         } catch (...) {
             std::cerr << "Error: Could not load pre-trained model from " << model_path << std::endl;
             std::cerr << "Please run train submode first." << std::endl;
@@ -1144,26 +1184,40 @@ static double SEDM(const sedmInputParameter& p, double tt, double Pc, double Pa,
             return;
         }
 
-        // Hybrid prediction (DDM + SEDM)
+        torch::Tensor input_all = torch::zeros({num_features, num_samples});
+        for (int i = 0; i < num_samples; ++i) {
+            for (int j = 0; j < num_features; ++j) {
+                input_all[j][i] = input_data_rows[static_cast<size_t>(i)][j];
+            }
+        }
+        input_all = input_all.to(device);
+
+        // Hybrid prediction (DDM + SEDM) on all time steps
         std::cout << "\n=== Hybrid Prediction (DDM + SEDM) ===" << std::endl;
         net->eval();
         torch::NoGradGuard no_grad;
 
-        std::vector<double> aV_DDM, aV_SEM, aV_hybrid;
-        std::vector<double> YTest_vec;
+        std::vector<double> all_times;
+        std::vector<double> all_y_test;
+        std::vector<double> all_v_ddm;
+        std::vector<double> all_v_sem;
+        std::vector<double> all_v_hybrid;
+        all_times.reserve(static_cast<size_t>(num_samples));
+        all_y_test.reserve(static_cast<size_t>(num_samples));
+        all_v_ddm.reserve(static_cast<size_t>(num_samples));
+        all_v_sem.reserve(static_cast<size_t>(num_samples));
+        all_v_hybrid.reserve(static_cast<size_t>(num_samples));
 
-        for (int i = 0; i < num_test; ++i) {
-            YTest_vec.push_back(output_test[i].item<double>());
-        }
-
-        torch::Tensor input = input_test.index({torch::indexing::Slice(), 0}).clone();
+        torch::Tensor input = input_all.index({torch::indexing::Slice(), 0}).clone();
+        const int dataset_row_size = static_cast<int>(input_columns.size()) + 1;
+        const int update_idx = dataset_row_size * w - dataset_row_size - 1;
 
         controller.update_status("battery_lifespan", "running", 0, 0, 0.0, 0.0, 0.0, 0.0,
                                  "Hybrid prediction in progress");
 
-        for (int n = 0; n < num_test; ++n) {
+        for (int n = 0; n < num_samples; ++n) {
             if ((n + 1) % 50 == 0) {
-                std::cout << "Processing step " << (n + 1) << "/" << num_test << std::endl;
+                std::cout << "Processing step " << (n + 1) << "/" << num_samples << std::endl;
                 std::string cmd = controller.read_command();
                 if (cmd == "stop") {
                     controller.acknowledge_command();
@@ -1173,74 +1227,69 @@ static double SEDM(const sedmInputParameter& p, double tt, double Pc, double Pa,
                 }
             }
 
-            // DDM prediction
             torch::Tensor inputn_new = normalizer->transform_X(input);
             torch::Tensor an = net->forward(inputn_new.unsqueeze(0));
             torch::Tensor BPoutput = normalizer->inverse_transform_Y(an);
-            double V_DDM = BPoutput[0][0].item<double>();
+            const double V_DDM = BPoutput[0][0].item<double>();
 
-            // SEDM prediction
-            int idx = numTimeStepsTrain + w - 1 + n;
-            double V_SEM = SEDM(input_params, tt[idx], Pc[idx], Pa[idx], T[idx], I[idx]);
+            const int idx = n + w - 1;
+            double V_SEM = 0.0;
+            if (idx >= 0 && idx < static_cast<int>(tt.size())) {
+                V_SEM = SEDM(input_params, tt[static_cast<size_t>(idx)], Pc[static_cast<size_t>(idx)],
+                             Pa[static_cast<size_t>(idx)], T[static_cast<size_t>(idx)], I[static_cast<size_t>(idx)]);
+            }
 
-            // Hybrid prediction
-            double V_hybrid = (RR * V_SEM + V_DDM) / (RR + 1.0);
+            const double V_hybrid = (RR * V_SEM + V_DDM) / (RR + 1.0);
+            const double time_val = time_for_sample(tt, n, w);
 
-            aV_DDM.push_back(V_DDM);
-            aV_SEM.push_back(V_SEM);
-            aV_hybrid.push_back(V_hybrid);
+            all_times.push_back(time_val);
+            all_y_test.push_back(output_data_vec[static_cast<size_t>(n)]);
+            all_v_ddm.push_back(V_DDM);
+            all_v_sem.push_back(V_SEM);
+            all_v_hybrid.push_back(V_hybrid);
 
-            // Update input for next iteration
-            if (n < num_test - 1) {
-                input = input_test.index({torch::indexing::Slice(), n + 1}).clone();
-                int dataset_row_size = static_cast<int>(input_columns.size()) + 1;
-                int update_idx = dataset_row_size * w - dataset_row_size - 1;
-                if (update_idx < num_features) {
+            if (n < num_samples - 1) {
+                input = input_all.index({torch::indexing::Slice(), n + 1}).clone();
+                if (update_idx >= 0 && update_idx < num_features) {
                     input[update_idx] = V_hybrid;
                 }
             }
         }
 
-        // Calculate metrics
-        std::cout << "\n=== Evaluation Results ===" << std::endl;
+        std::vector<double> YTest_vec;
+        std::vector<double> aV_DDM;
+        std::vector<double> aV_SEM;
+        std::vector<double> aV_hybrid;
+        std::vector<double> out_times;
+        YTest_vec.reserve(all_times.size());
+        aV_DDM.reserve(all_times.size());
+        aV_SEM.reserve(all_times.size());
+        aV_hybrid.reserve(all_times.size());
+        out_times.reserve(all_times.size());
 
-        double RR_SEM = calculateRSquared(YTest_vec, aV_SEM);
-        double RR_DDM = calculateRSquared(YTest_vec, aV_DDM);
-        double RR_Hybrid = calculateRSquared(YTest_vec, aV_hybrid);
+        const size_t output_start = find_closest_time_start_index(all_times, time_begin);
+        const double matched_time = all_times[output_start];
+        if (std::abs(matched_time - time_begin) > 1e-9) {
+            std::cout << "Output starts at nearest Time=" << matched_time
+                      << " (requested time_begin=" << time_begin << ")" << std::endl;
+        }
 
-        double RMSE_SEM = calculateRMSE(YTest_vec, aV_SEM);
-        double RMSE_DDM = calculateRMSE(YTest_vec, aV_DDM);
-        double RMSE_Hybrid = calculateRMSE(YTest_vec, aV_hybrid);
+        for (size_t i = output_start; i < all_times.size(); ++i) {
+            out_times.push_back(all_times[i]);
+            YTest_vec.push_back(all_y_test[i]);
+            aV_DDM.push_back(all_v_ddm[i]);
+            aV_SEM.push_back(all_v_sem[i]);
+            aV_hybrid.push_back(all_v_hybrid[i]);
+        }
 
-        double MAE_SEM = calculateMAE(YTest_vec, aV_SEM);
-        double MAE_DDM = calculateMAE(YTest_vec, aV_DDM);
-        double MAE_Hybrid = calculateMAE(YTest_vec, aV_hybrid);
+        if (YTest_vec.empty()) {
+            std::cerr << "Error: No prediction rows after time_begin alignment." << std::endl;
+            controller.update_status("battery_lifespan", "stopped", 0, 0, 0.0, 0.0, 0.0, 0.0,
+                                     "No rows after time_begin alignment");
+            return;
+        }
 
-        double RE_SEM = calculateMeanRE(YTest_vec, aV_SEM);
-        double RE_DDM = calculateMeanRE(YTest_vec, aV_DDM);
-        double RE_Hybrid = calculateMeanRE(YTest_vec, aV_hybrid);
-
-        std::cout << "\nR2 Values:" << std::endl;
-        std::cout << "  SEM:    " << RR_SEM << std::endl;
-        std::cout << "  DDM:    " << RR_DDM << std::endl;
-        std::cout << "  Hybrid: " << RR_Hybrid << std::endl;
-
-        std::cout << "\nRMSE Values:" << std::endl;
-        std::cout << "  SEM:    " << RMSE_SEM << std::endl;
-        std::cout << "  DDM:    " << RMSE_DDM << std::endl;
-        std::cout << "  Hybrid: " << RMSE_Hybrid << std::endl;
-
-        std::cout << "\nMAE Values:" << std::endl;
-        std::cout << "  SEM:    " << MAE_SEM << std::endl;
-        std::cout << "  DDM:    " << MAE_DDM << std::endl;
-        std::cout << "  Hybrid: " << MAE_Hybrid << std::endl;
-
-        std::cout << "\nMean Relative Error (%):" << std::endl;
-        std::cout << "  SEM:    " << RE_SEM << std::endl;
-        std::cout << "  DDM:    " << RE_DDM << std::endl;
-        std::cout << "  Hybrid: " << RE_Hybrid << std::endl;
-
-        // Battery End-of-Life (EOL) estimation
+        // Battery End-of-Life (EOL) estimation on output range
         std::cout << "\n=== Battery End-of-Life (EOL) Estimate ===" << std::endl;
         double V_max = *std::max_element(aV_hybrid.begin(), aV_hybrid.end());
         double V_threshold = eol_threshold_ratio * V_max;
@@ -1256,36 +1305,30 @@ static double SEDM(const sedmInputParameter& p, double tt, double Pc, double Pa,
         double real_lifetime = -1.0;
         std::string eol_message;
         if (eol_index >= 0) {
-            int data_idx = numTimeStepsTrain + w - 1 + eol_index;
-            if (data_idx < static_cast<int>(tt.size())) {
-                eol_time = tt[data_idx];
-                real_lifetime = eol_time - time_begin;
-            }
+            eol_time = out_times[static_cast<size_t>(eol_index)];
+            real_lifetime = eol_time - time_begin;
             eol_message = "EOL at step " + std::to_string(eol_index) +
                           " (time=" + std::to_string(eol_time) + "h, real_lifetime=" + std::to_string(real_lifetime) +
-                          "h, V=" + std::to_string(aV_hybrid[eol_index]) + ")";
+                          "h, V=" + std::to_string(aV_hybrid[static_cast<size_t>(eol_index)]) + ")";
             std::cout << "Max predicted voltage: " << V_max << std::endl;
-            std::cout << "80% threshold: " << V_threshold << std::endl;
-            std::cout << "EOL occurs at prediction step " << eol_index
-                    << " (data index " << data_idx << ", time = " << eol_time << " h)" << std::endl;
+            std::cout << eol_threshold_ratio * 100.0 << "% threshold: " << V_threshold << std::endl;
+            std::cout << "EOL occurs at output step " << eol_index
+                      << " (time = " << eol_time << " h)" << std::endl;
             if (time_begin > 0.0 && real_lifetime >= 0.0) {
                 std::cout << "Real lifetime (after subtracting time_begin=" << time_begin << "): "
-                        << real_lifetime << " h" << std::endl;
+                          << real_lifetime << " h" << std::endl;
             }
         } else {
             eol_message = "No EOL crossing detected within prediction horizon";
             std::cout << "Max predicted voltage: " << V_max << std::endl;
-            std::cout << "80% threshold: " << V_threshold << std::endl;
+            std::cout << eol_threshold_ratio * 100.0 << "% threshold: " << V_threshold << std::endl;
             std::cout << "No EOL crossing detected within prediction horizon." << std::endl;
         }
 
-        // Save results
         std::ofstream outfile(output_predictions_path);
         outfile << "Time,YTest,V_SEM,V_DDM,V_Hybrid,Error_SEM,Error_DDM,Error_Hybrid\n";
         for (size_t i = 0; i < YTest_vec.size(); ++i) {
-            const int sample_index = numTimeStepsTrain + static_cast<int>(i);
-            const double time_val = time_for_sample(tt, sample_index, w);
-            outfile << time_val << ","
+            outfile << out_times[i] << ","
                     << YTest_vec[i] << ","
                     << aV_SEM[i] << ","
                     << aV_DDM[i] << ","
@@ -1295,10 +1338,10 @@ static double SEDM(const sedmInputParameter& p, double tt, double Pc, double Pa,
                     << (aV_hybrid[i] - YTest_vec[i]) << "\n";
         }
         outfile.close();
-        std::cout << "\nResults saved to " << output_predictions_path << std::endl;
+        std::cout << "\nResults saved to " << output_predictions_path
+                  << " (" << YTest_vec.size() << " rows, from Time=" << matched_time << ")" << std::endl;
 
-        controller.update_status("battery_lifespan", "completed", 0, 0, 0.0, RR_Hybrid,
-                                 RMSE_Hybrid, MAE_Hybrid, eol_message);
+        controller.update_status("battery_lifespan", "completed", 0, 0, 0.0, 0.0, 0.0, 0.0, eol_message);
 
         std::cout << "\nHybrid prediction completed!" << std::endl;
     }

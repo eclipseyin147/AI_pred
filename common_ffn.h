@@ -192,7 +192,7 @@ inline std::unique_ptr<DataNormalizer> create_normalizer(NormalizationMethod met
     }
 }
 
-// readDataFile: see data_reader.h (txt/csv, header skip, numRowsBegin/numRowsEnd)
+// readDataFile: see data_reader.h (txt/csv, header skip, 1-based inclusive data row range)
 
 // ============================================================================
 // Metrics (tensor versions)

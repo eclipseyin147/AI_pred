@@ -1,6 +1,7 @@
 #ifndef DATA_READER_H
 #define DATA_READER_H
 
+#include <algorithm>
 #include <cctype>
 #include <cstdlib>
 #include <fstream>
@@ -70,7 +71,8 @@ inline bool parse_numeric_row(const std::string& line, bool is_csv, std::vector<
     return ss.eof();
 }
 
-inline std::vector<std::vector<double>> readDataFile(const std::string& filename, int numRows) {
+// Read all numeric data rows (skip first non-numeric line as header; ignore blank lines).
+inline std::vector<std::vector<double>> readAllNumericRows(const std::string& filename) {
     std::vector<std::vector<double>> data;
     std::ifstream file(filename);
     if (!file.is_open()) {
@@ -91,7 +93,7 @@ inline std::vector<std::vector<double>> readDataFile(const std::string& filename
             raw_line.erase(0, 3);
         }
 
-        std::string line = trim_copy(raw_line);
+        const std::string line = trim_copy(raw_line);
         if (line.empty()) {
             continue;
         }
@@ -112,67 +114,46 @@ inline std::vector<std::vector<double>> readDataFile(const std::string& filename
 
         first_non_empty_line = false;
         data.push_back(row);
-        if (numRows > 0 && data.size() >= static_cast<size_t>(numRows)) {
-            break;
-        }
     }
 
     return data;
 }
 
+// numRowsBegin/numRowsEnd: 1-based inclusive indices of numeric data rows (GUI row numbers).
+// numRowsBegin <= 0 is treated as 1. numRowsEnd <= 0 reads through the last data row.
 inline std::vector<std::vector<double>> readDataFile(const std::string& filename,
                                                      int numRowsBegin,
                                                      int numRowsEnd) {
-    std::vector<std::vector<double>> data;
-    std::ifstream file(filename);
-    if (!file.is_open()) {
-        std::cerr << "Error: Could not open file " << filename << std::endl;
-        return data;
+    const auto all_rows = readAllNumericRows(filename);
+    if (all_rows.empty()) {
+        return all_rows;
     }
 
-    std::string raw_line;
-    bool detected_format = false;
-    bool is_csv = false;
-    int currentRow = 0;
+    const int start_row = (numRowsBegin <= 0) ? 1 : numRowsBegin;
+    const int end_row = (numRowsEnd <= 0)
+                            ? static_cast<int>(all_rows.size())
+                            : numRowsEnd;
 
-    while (std::getline(file, raw_line)) {
-        if (currentRow < numRowsBegin) {
-            ++currentRow;
-            continue;
-        }
-        if (numRowsEnd > 0 && currentRow >= numRowsEnd) {
-            break;
-        }
-
-        if (raw_line.size() >= 3 &&
-            static_cast<unsigned char>(raw_line[0]) == 0xEF &&
-            static_cast<unsigned char>(raw_line[1]) == 0xBB &&
-            static_cast<unsigned char>(raw_line[2]) == 0xBF) {
-            raw_line.erase(0, 3);
-        }
-
-        const std::string line = trim_copy(raw_line);
-        if (line.empty()) {
-            ++currentRow;
-            continue;
-        }
-
-        if (!detected_format) {
-            is_csv = (line.find(',') != std::string::npos);
-            detected_format = true;
-        }
-
-        std::vector<double> row;
-        if (!parse_numeric_row(line, is_csv, row)) {
-            ++currentRow;
-            continue;
-        }
-
-        data.push_back(row);
-        ++currentRow;
+    if (start_row < 1 || start_row > end_row) {
+        return {};
     }
 
-    return data;
+    const size_t from = static_cast<size_t>(start_row - 1);
+    if (from >= all_rows.size()) {
+        return {};
+    }
+
+    const size_t to = std::min(static_cast<size_t>(end_row), all_rows.size());
+    return std::vector<std::vector<double>>(all_rows.begin() + static_cast<std::ptrdiff_t>(from),
+                                            all_rows.begin() + static_cast<std::ptrdiff_t>(to));
+}
+
+// Read first numRows numeric data rows (1-based count from first data row after header).
+inline std::vector<std::vector<double>> readDataFile(const std::string& filename, int numRows) {
+    if (numRows <= 0) {
+        return readAllNumericRows(filename);
+    }
+    return readDataFile(filename, 1, numRows);
 }
 
 #endif // DATA_READER_H
