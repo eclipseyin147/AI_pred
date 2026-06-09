@@ -12,6 +12,7 @@
 #include <iostream>
 #include <iomanip>
 #include <algorithm>
+#include <filesystem>
 #include <torch/nn/modules/dropout.h>
 #include "training_controller.h"
 namespace lifespanPred {
@@ -80,7 +81,10 @@ enum class SequenceNormMethod {
 class SequenceNormalizer {
 public:
     SequenceNormMethod method = SequenceNormMethod::RESCALE_SYMMETRIC;
-    torch::Tensor mean, std_dev, min_val, max_val;
+    torch::Tensor mean = torch::empty({0});
+    torch::Tensor std_dev = torch::empty({0});
+    torch::Tensor min_val = torch::empty({0});
+    torch::Tensor max_val = torch::empty({0});
     bool fitted = false;
 
     explicit SequenceNormalizer(SequenceNormMethod m = SequenceNormMethod::RESCALE_SYMMETRIC)
@@ -273,7 +277,7 @@ void SequenceTrainer<ModelType>::train(const std::vector<torch::Tensor>& train_s
     }
 
     if (controller) {
-        controller->update_status("faultdiag", "running", 0, static_cast<int>(config.max_epochs),
+        controller->update_train_status("faultdiag", "running", 0, static_cast<int>(config.max_epochs),
                                   0.0, 0.0, 0.0, 0.0, "Training started");
     }
 
@@ -283,7 +287,7 @@ void SequenceTrainer<ModelType>::train(const std::vector<torch::Tensor>& train_s
             std::string cmd = controller->read_command();
             if (cmd == "pause") {
                 controller->acknowledge_command();
-                controller->update_status("faultdiag", "paused", static_cast<int>(epoch),
+                controller->update_train_status("faultdiag", "paused", static_cast<int>(epoch),
                                           static_cast<int>(config.max_epochs), 0.0, 0.0, 0.0, 0.0,
                                           "Paused by user");
                 // Save checkpoint
@@ -294,7 +298,7 @@ void SequenceTrainer<ModelType>::train(const std::vector<torch::Tensor>& train_s
 
                 std::string resume_cmd = controller->wait_for_resume();
                 if (resume_cmd == "stop") {
-                    controller->update_status("faultdiag", "stopped", static_cast<int>(epoch),
+                    controller->update_train_status("faultdiag", "stopped", static_cast<int>(epoch),
                                               static_cast<int>(config.max_epochs), 0.0, 0.0, 0.0, 0.0,
                                               "Stopped by user");
                     return;
@@ -302,14 +306,14 @@ void SequenceTrainer<ModelType>::train(const std::vector<torch::Tensor>& train_s
                 if (resume_cmd == "restart") {
                     controller->clear_checkpoint(config.model_save_path + ".checkpoint.json",
                                                  config.model_save_path + ".checkpoint.pt");
-                    controller->update_status("faultdiag", "running", 0,
+                    controller->update_train_status("faultdiag", "running", 0,
                                               static_cast<int>(config.max_epochs), 0.0, 0.0, 0.0, 0.0,
                                               "Restarting fresh");
                     epoch = -1;
                     best_val_acc = 0.0;
                     continue;
                 }
-                controller->update_status("faultdiag", "running", static_cast<int>(epoch),
+                controller->update_train_status("faultdiag", "running", static_cast<int>(epoch),
                                           static_cast<int>(config.max_epochs), 0.0, 0.0, 0.0, 0.0,
                                           "Resumed");
             }
@@ -318,7 +322,7 @@ void SequenceTrainer<ModelType>::train(const std::vector<torch::Tensor>& train_s
                 save_model(config.model_save_path + ".checkpoint.pt");
                 nlohmann::json meta = {{"epoch", epoch}, {"best_val_acc", best_val_acc}};
                 controller->save_checkpoint_meta(config.model_save_path + ".checkpoint.json", meta);
-                controller->update_status("faultdiag", "stopped", static_cast<int>(epoch),
+                controller->update_train_status("faultdiag", "stopped", static_cast<int>(epoch),
                                           static_cast<int>(config.max_epochs), 0.0, 0.0, 0.0, 0.0,
                                           "Stopped by user");
                 return;
@@ -327,7 +331,7 @@ void SequenceTrainer<ModelType>::train(const std::vector<torch::Tensor>& train_s
                 controller->acknowledge_command();
                 controller->clear_checkpoint(config.model_save_path + ".checkpoint.json",
                                              config.model_save_path + ".checkpoint.pt");
-                controller->update_status("faultdiag", "running", 0,
+                controller->update_train_status("faultdiag", "running", 0,
                                           static_cast<int>(config.max_epochs), 0.0, 0.0, 0.0, 0.0,
                                           "Restarting fresh");
                 epoch = -1;
@@ -415,7 +419,7 @@ void SequenceTrainer<ModelType>::train(const std::vector<torch::Tensor>& train_s
 
             // Update controller status
             if (controller) {
-                controller->update_status("faultdiag", "running", static_cast<int>(epoch + 1),
+                controller->update_train_status("faultdiag", "running", static_cast<int>(epoch + 1),
                                           static_cast<int>(config.max_epochs), avg_loss, 0.0,
                                           0.0, 0.0,
                                           "Epoch " + std::to_string(epoch + 1));
@@ -425,7 +429,7 @@ void SequenceTrainer<ModelType>::train(const std::vector<torch::Tensor>& train_s
 
     std::cout << "Training completed!" << std::endl;
     if (controller) {
-        controller->update_status("faultdiag", "completed",
+        controller->update_train_status("faultdiag", "completed",
                                   static_cast<int>(config.max_epochs),
                                   static_cast<int>(config.max_epochs), 0.0,
                                   0.0, 0.0, 0.0, "Training completed");
@@ -477,14 +481,60 @@ std::vector<int64_t> SequenceTrainer<ModelType>::predict(const std::vector<torch
 
 template<typename ModelType>
 void SequenceTrainer<ModelType>::save_model(const std::string& path) {
-    torch::save(model, path);
-    normalizer.save(path + ".normalizer");
+    try {
+        torch::save(model, path);
+    } catch (const std::exception& e) {
+        std::cerr << "[SequenceTrainer] Failed to save model to " << path
+                  << ": " << e.what() << std::endl;
+        throw;
+    }
+
+    // Only save normalizer if it was actually fitted (e.g., TCN uses normalization,
+    // CNN does not). Attempting to save undefined/empty tensors crashes LibTorch.
+    if (!normalizer.fitted) {
+        return;
+    }
+
+    try {
+        normalizer.save(path + ".normalizer");
+    } catch (const std::exception& e) {
+        std::cerr << "[SequenceTrainer] Failed to save normalizer to " << path
+                  << ".normalizer: " << e.what() << std::endl;
+        // Do not rethrow: the model itself was saved successfully.
+    }
 }
 
 template<typename ModelType>
 void SequenceTrainer<ModelType>::load_model(const std::string& path) {
-    torch::load(model, path);
-    normalizer.load(path + ".normalizer");
+    try {
+        torch::load(model, path);
+    } catch (const std::exception& e) {
+        std::cerr << "[SequenceTrainer] Failed to load model from " << path
+                  << ": " << e.what() << std::endl;
+        throw;
+    }
+
+    std::string norm_path = path + ".normalizer";
+    bool norm_exists = false;
+    try {
+        norm_exists = std::filesystem::exists(norm_path);
+    } catch (...) {
+        norm_exists = false;
+    }
+
+    if (!norm_exists) {
+        normalizer.fitted = false;
+        return;
+    }
+
+    try {
+        normalizer.load(norm_path);
+    } catch (const std::exception& e) {
+        std::cerr << "[SequenceTrainer] Failed to load normalizer from " << norm_path
+                  << ": " << e.what() << std::endl;
+        normalizer.fitted = false;
+        // Do not rethrow: the model itself was loaded successfully.
+    }
 }
 
 } // namespace lifespanPred

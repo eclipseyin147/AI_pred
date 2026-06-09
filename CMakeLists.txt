@@ -1,7 +1,9 @@
 # CMake 最低版本要求
 cmake_minimum_required(VERSION 3.10)
 
+
 project(tju-torch)
+
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -24,10 +26,9 @@ if(NOT matio_FOUND)
     endif()
 endif()
 
-# Unified executable replacing FFNPredictor, SEDM, and faultDiag
+# Unified executable: battery_lifespan (train/predict) and faultdiag
 add_executable(tju-torch
     unified_main.cpp
-    ffn_manager.cpp
     sedm_manager.cpp
     faultdiag_manager.cpp
     faultDiagnosis.cpp
@@ -48,6 +49,7 @@ endif()
 if (OpenMP_CXX_FOUND)
     target_link_libraries(tju-torch OpenMP::OpenMP_CXX)
 endif ()
+
 
 if (MSVC)
     # Windows platform compile options
@@ -131,8 +133,8 @@ if (WIN32)
                 list(APPEND ALL_DEP_DLLS "${DLL_PATH}")
             else ()
                 message(WARNING "CUDA runtime DLL not found: ${DLL_PATH}")
-            endif ()
-        endforeach ()
+        endif ()
+    endforeach ()
     else ()
         message(STATUS "CUDA_PATH not set; CUDA runtime DLLs will not be installed.")
     endif ()

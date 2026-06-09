@@ -1,49 +1,31 @@
 {
-  "mode": "ffn",
-  "ffn": {
+  "battery_lifespan": {
     "input_data_path": "Data_V13_40kW.txt",
-    "output_model_path": "ffn_best_model.pt",
-    "output_predictions_path": "predictions.csv",
-    "output_training_log_path": "training_log.csv",
+    "model_path": "battery_best_model.pt",
+    "output_predictions_path": "battery_predictions.csv",
+    "output_training_log_path": "battery_training_log.csv",
     "control_file_path": "control.json",
     "status_file_path": "status.json",
-    "input_columns": [4, 5, 8, 10],
-    "output_column": 11,
     "hidden_layers": 2,
     "hidden_layer_neurons": [50, 50],
-    "learning_rate": 0.001,
-    "epochs": 15000,
-    "batch_size": 32,
-    "optimizer_type": "adamw",
+    "learning_rate": 1.0,
+    "epochs": 60,
+    "batch_size": 60000,
+    "optimizer_type": "lbfgs",
     "optimizer": {
       "lbfgs": {
-        "learning_rate": 1.0,
-        "max_iter": 20,
-        "max_eval": 25,
-        "tolerance_grad": 1e-7,
-        "tolerance_change": 1e-9,
-        "history_size": 100
-      },
-      "rmsprop": {
-        "learning_rate": 0.01,
-        "alpha": 0.99,
-        "eps": 1e-8,
-        "weight_decay": 0.0,
-        "momentum": 0.0,
-        "centered": false
-      },
-      "adam": {
-        "learning_rate": 0.001,
-        "beta1": 0.9,
-        "beta2": 0.999,
-        "eps": 1e-8,
-        "weight_decay": 0.0
+        "learning_rate": 0.005,
+        "max_iter": 200,
+        "max_eval": 1200,
+        "tolerance_grad": 1e-12,
+        "tolerance_change": 1e-15,
+        "history_size": 30
       },
       "adamw": {
         "learning_rate": 0.001,
         "beta1": 0.9,
         "beta2": 0.999,
-        "eps": 1e-10,
+        "eps": 1e-8,
         "weight_decay": 0.001
       }
     },
@@ -51,52 +33,24 @@
       "enabled": true,
       "method": "minmax_neg1_1"
     },
-    "goal_loss": 2e-5,
+    "goal_loss": 1e-9,
     "max_iterations": 1000,
-    "target_r2": 0.85,
-    "print_interval": 200,
+    "target_r2": 0.8,
+    "print_interval": 10,
     "window_size": 5,
-    "train_samples": 300,
-    "num_rows": 900
-  },
-  "sedm": {
-    "input_data_path": "Data_V13_40kW.txt",
-    "model_path": "sedm_best_model.pt",
-    "output_predictions_path": "hybrid_predictions.csv",
-    "control_file_path": "control.json",
-    "status_file_path": "status.json",
-    "hidden_layers": 2,
-    "hidden_layer_neurons": [50, 50],
-    "learning_rate": 1.0,
-    "epochs": 1000,
-    "batch_size": 32,
-    "optimizer_type": "lbfgs",
-    "optimizer": {
-      "lbfgs": {
-        "learning_rate": 1.0,
-        "max_iter": 20,
-        "max_eval": 25,
-        "tolerance_grad": 1e-7,
-        "tolerance_change": 1e-9,
-        "history_size": 100
-      }
-    },
-    "normalization": {
-      "enabled": true,
-      "method": "minmax_neg1_1"
-    },
-    "goal_loss": 1e-10,
+    "training_sample_ratio": 0.5,
+    "num_rows_begin": 1,
+    "num_rows_end": 900,
+    "time_begin": 0.0,
+    "eol_threshold_ratio": 0.80,
+    "rr": 4.0,
     "input_columns": [4, 5, 8, 10],
     "output_column": 11,
-    "time_column": 0,
-    "window_size": 5,
-    "train_samples": 300,
-    "num_rows": 900,
-    "rr": 4.0
+    "time_column": 0
   },
   "faultdiag": {
-    "submode": "tcn",
-    "input_mat_path": "ALL_Traindata1.mat",
+    "submode": "cnn",
+    "input_mat_path": "Copy_of_select-model fault data.mat",
     "output_model_path": "fault_best_model.pt",
     "control_file_path": "control.json",
     "status_file_path": "status.json",
@@ -106,11 +60,11 @@
     "epochs": 100,
     "batch_size": 26,
     "optimizer": "adam",
-    "use_gpu": false,
-    "data_var": "AXTrain3",
-    "label_var": "AYTrain",
-    "val_data_var": "AXTest3",
-    "val_label_var": "AYTest",
+    "use_gpu": true,
+    "data_var": "XTrain2",
+    "label_var": "YTrain2",
+    "val_data_var": "XText2",
+    "val_label_var": "YText2",
     "train_split": 0.8,
     "validation_frequency": 10,
     "normalization": {

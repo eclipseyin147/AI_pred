@@ -9,6 +9,7 @@
 #include <iostream>
 #include <cmath>
 #include <memory>
+#include "data_reader.h"
 
 // ============================================================================
 // Generalized Feedforward Neural Network
@@ -191,34 +192,7 @@ inline std::unique_ptr<DataNormalizer> create_normalizer(NormalizationMethod met
     }
 }
 
-// ============================================================================
-// Read whitespace-delimited data file
-// ============================================================================
-inline std::vector<std::vector<double>> readDataFile(const std::string& filename, int numRows) {
-    std::vector<std::vector<double>> data;
-    std::ifstream file(filename);
-    if (!file.is_open()) {
-        std::cerr << "Error: Could not open file " << filename << std::endl;
-        return data;
-    }
-    std::string line;
-    while (std::getline(file, line)) {
-        std::vector<double> row;
-        std::stringstream ss(line);
-        double value;
-        while (ss >> value) {
-            row.push_back(value);
-        }
-        if (!row.empty()) {
-            data.push_back(row);
-        }
-        if (numRows > 0 && data.size() >= static_cast<size_t>(numRows)) {
-            break;
-        }
-    }
-    file.close();
-    return data;
-}
+// readDataFile: see data_reader.h (txt/csv, header skip, 1-based inclusive data row range)
 
 // ============================================================================
 // Metrics (tensor versions)

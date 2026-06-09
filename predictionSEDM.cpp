@@ -31,14 +31,14 @@ class MinMaxScaler {
 public:
     torch::Tensor x_min, x_max, y_min, y_max;
 
-    void fit(const torch::Tensor& X, const torch::Tensor& Y) {
+    void fit(const torch::Tensor &X, const torch::Tensor &Y) {
         x_min = std::get<0>(X.min(1));
         x_max = std::get<0>(X.max(1));
         y_min = Y.min();
         y_max = Y.max();
     }
 
-    torch::Tensor transform_X(const torch::Tensor& X) {
+    torch::Tensor transform_X(const torch::Tensor &X) {
         auto x_range = x_max - x_min;
         x_range = torch::where(x_range == 0, torch::ones_like(x_range), x_range);
 
@@ -49,13 +49,13 @@ public:
         }
     }
 
-    torch::Tensor transform_Y(const torch::Tensor& Y) {
+    torch::Tensor transform_Y(const torch::Tensor &Y) {
         auto y_range = y_max - y_min;
         if (y_range.item<double>() == 0) y_range = torch::ones_like(y_range);
         return 2.0 * (Y - y_min) / y_range - 1.0;
     }
 
-    torch::Tensor inverse_transform_Y(const torch::Tensor& Y_norm) {
+    torch::Tensor inverse_transform_Y(const torch::Tensor &Y_norm) {
         auto y_range = y_max - y_min;
         if (y_range.item<double>() == 0) y_range = torch::ones_like(y_range);
         return (Y_norm + 1.0) * y_range / 2.0 + y_min;
@@ -66,10 +66,10 @@ public:
 double SEDM(double tt, double Pc, double Pa, double T, double I) {
     // Model constants
     const int nn = 300;
-    const double A_cell = 190e-4;  // m2
-    const double L_Pt = 4;         // g m-2
-    const double F = 96487;        // Faraday's Constant (coulomb/mole)
-    const double R = 8.314472;     // Ideal gas constant (J/K/mol)
+    const double A_cell = 190e-4; // m2
+    const double L_Pt = 4; // g m-2
+    const double F = 96487; // Faraday's Constant (coulomb/mole)
+    const double R = 8.314472; // Ideal gas constant (J/K/mol)
     const double P0 = 101325;
     const double Alpha_c = 0.2;
     const double Alpha_a = 0.8;
@@ -153,8 +153,8 @@ double SEDM(double tt, double Pc, double Pa, double T, double I) {
 }
 
 // Read data file
-std::vector<std::vector<double>> readDataFile(const std::string& filename, int numRows) {
-    std::vector<std::vector<double>> data;
+std::vector<std::vector<double> > readDataFile(const std::string &filename, int numRows) {
+    std::vector<std::vector<double> > data;
     std::ifstream file(filename);
 
     if (!file.is_open()) {
@@ -186,9 +186,9 @@ std::vector<std::vector<double>> readDataFile(const std::string& filename, int n
 }
 
 // Calculate R-squared
-double calculateRSquared(const std::vector<double>& y_true, const std::vector<double>& y_pred) {
+double calculateRSquared(const std::vector<double> &y_true, const std::vector<double> &y_pred) {
     double y_mean = 0.0;
-    for (double val : y_true) y_mean += val;
+    for (double val: y_true) y_mean += val;
     y_mean /= y_true.size();
 
     double ss_tot = 0.0, ss_res = 0.0;
@@ -201,7 +201,7 @@ double calculateRSquared(const std::vector<double>& y_true, const std::vector<do
 }
 
 // Calculate RMSE
-double calculateRMSE(const std::vector<double>& y_true, const std::vector<double>& y_pred) {
+double calculateRMSE(const std::vector<double> &y_true, const std::vector<double> &y_pred) {
     double sum = 0.0;
     for (size_t i = 0; i < y_true.size(); ++i) {
         sum += std::pow(y_true[i] - y_pred[i], 2);
@@ -210,7 +210,7 @@ double calculateRMSE(const std::vector<double>& y_true, const std::vector<double
 }
 
 // Calculate mean relative error
-double calculateMeanRE(const std::vector<double>& y_true, const std::vector<double>& y_pred) {
+double calculateMeanRE(const std::vector<double> &y_true, const std::vector<double> &y_pred) {
     double sum = 0.0;
     for (size_t i = 0; i < y_true.size(); ++i) {
         sum += std::abs((y_pred[i] - y_true[i]) / y_true[i]) * 100.0;
@@ -225,7 +225,7 @@ int main() {
     int num_threads = omp_get_max_threads();
 
     // Allow user to override via environment variable
-    const char* omp_env = std::getenv("OMP_NUM_THREADS");
+    const char *omp_env = std::getenv("OMP_NUM_THREADS");
     if (omp_env != nullptr) {
         num_threads = std::atoi(omp_env);
     }
@@ -263,20 +263,20 @@ int main() {
 
     // Extract raw experimental data
     std::vector<double> tt, Pa, Pc, T, I, V_cell_exp;
-    for (const auto& row : raw_data) {
+    for (const auto &row: raw_data) {
         if (row.size() >= 12) {
-            tt.push_back(row[0]);              // Accumulated time (h)
-            Pa.push_back(row[5]);              // Anode pressure
-            Pc.push_back(row[4]);              // Cathode pressure
-            T.push_back(row[8] + 273.15);      // Temperature (K)
-            I.push_back(row[10]);              // Current (A)
+            tt.push_back(row[0]); // Accumulated time (h)
+            Pa.push_back(row[5]); // Anode pressure
+            Pc.push_back(row[4]); // Cathode pressure
+            T.push_back(row[8] + 273.15); // Temperature (K)
+            I.push_back(row[10]); // Current (A)
             V_cell_exp.push_back(row[11] / 300.0); // Cell voltage (V)
         }
     }
 
     // Prepare Input and Output for neural network
-    std::vector<std::vector<double>> Input, Output;
-    for (const auto& row : raw_data) {
+    std::vector<std::vector<double> > Input, Output;
+    for (const auto &row: raw_data) {
         if (row.size() >= 12) {
             Input.push_back({row[4], row[5], row[8], row[10]});
             Output.push_back({row[11]});
@@ -284,7 +284,7 @@ int main() {
     }
 
     // Create Dataset
-    std::vector<std::vector<double>> Dataset;
+    std::vector<std::vector<double> > Dataset;
     for (size_t i = 0; i < Input.size(); ++i) {
         std::vector<double> row = Input[i];
         row.push_back(Output[i][0]);
@@ -292,7 +292,7 @@ int main() {
     }
 
     // Apply sliding window
-    std::vector<std::vector<double>> input_data_rows;
+    std::vector<std::vector<double> > input_data_rows;
     std::vector<double> output_data_vec;
 
     for (size_t i = 0; i < dd - w; ++i) {
@@ -300,7 +300,7 @@ int main() {
         for (int j = 0; j < w; ++j) {
             size_t idx = i + j;
             if (idx < Dataset.size()) {
-                for (double val : Dataset[idx]) {
+                for (double val: Dataset[idx]) {
                     Input_pre.push_back(val);
                 }
             }
@@ -326,7 +326,7 @@ int main() {
     torch::Tensor output_train = torch::zeros({numTimeStepsTrain});
 
     int train_limit = std::min(numTimeStepsTrain, num_samples);
-    #pragma omp parallel for
+#pragma omp parallel for
     for (int i = 0; i < train_limit; ++i) {
         for (int j = 0; j < num_features; ++j) {
             input_train[j][i] = input_data_rows[i][j];
@@ -337,7 +337,7 @@ int main() {
     torch::Tensor input_test = torch::zeros({num_features, num_test});
     torch::Tensor output_test = torch::zeros({num_test});
 
-    #pragma omp parallel for
+#pragma omp parallel for
     for (int i = 0; i < num_test; ++i) {
         for (int j = 0; j < num_features; ++j) {
             input_test[j][i] = input_data_rows[numTimeStepsTrain + i][j];
@@ -379,11 +379,11 @@ int main() {
         torch::optim::LBFGS optimizer(
             net->parameters(),
             torch::optim::LBFGSOptions(1.0)
-                .max_iter(20)
-                .max_eval(25)
-                .tolerance_grad(1e-7)
-                .tolerance_change(1e-9)
-                .history_size(100)
+            .max_iter(20)
+            .max_eval(25)
+            .tolerance_grad(1e-7)
+            .tolerance_change(1e-9)
+            .history_size(100)
         );
 
         torch::Tensor X_train = inputn.transpose(0, 1);
@@ -420,7 +420,7 @@ int main() {
     net->eval();
     torch::NoGradGuard no_grad;
 
-    const double RR = 4.0;  // Weighting ratio
+    const double RR = 4.0; // Weighting ratio
     std::vector<double> aV_DDM, aV_SEM, aV_hybrid;
     std::vector<double> YTest_vec;
 

@@ -9,9 +9,6 @@ TrainingController::TrainingController(const std::string& control_file,
       status_file_(status_file),
       last_command_("") {}
 
-// ============================================================================
-// Control file
-// ============================================================================
 std::string TrainingController::read_command() {
     nlohmann::json j;
     if (!atomic_read_json(control_file_, j)) {
@@ -22,9 +19,7 @@ std::string TrainingController::read_command() {
     }
     std::string cmd = j.value("command", "");
 
-    // Ignore if same as last acknowledged command (unless timestamp changed)
     if (cmd == last_command_) {
-        // If timestamp is present and different, treat as new command
         if (j.contains("timestamp_ms")) {
             // Always process - frontend should change timestamp for new commands
         } else {
@@ -39,7 +34,6 @@ void TrainingController::acknowledge_command() {
     if (atomic_read_json(control_file_, j)) {
         last_command_ = j.value("command", "");
     }
-    // Write back with empty command to show acknowledgement
     j["command"] = "";
     atomic_write_json(control_file_, j);
 }
@@ -52,48 +46,80 @@ std::string TrainingController::wait_for_resume(int poll_interval_ms) {
             acknowledge_command();
             return cmd;
         }
-        // Also handle the case where command is already empty (resumed externally)
-        if (cmd.empty()) {
-            // Continue waiting unless explicitly resumed
-        }
     }
 }
 
-// ============================================================================
-// Status file
-// ============================================================================
 void TrainingController::write_status(const nlohmann::json& status) {
     atomic_write_json(status_file_, status);
 }
 
-void TrainingController::update_status(const std::string& mode,
-                                       const std::string& state,
-                                       int epoch,
-                                       int total_epochs,
-                                       double loss,
-                                       double best_r2,
-                                       double rmse,
-                                       double mae,
-                                       const std::string& message) {
-    nlohmann::json status = {
-        {"mode", mode},
-        {"state", state},
-        {"epoch", epoch},
-        {"total_epochs", total_epochs},
-        {"loss", loss},
-        {"best_r2", best_r2},
-        {"rmse", rmse},
-        {"mae", mae},
-        {"message", message},
-        {"timestamp_ms", std::chrono::duration_cast<std::chrono::milliseconds>(
-            std::chrono::steady_clock::now().time_since_epoch()).count()}
-    };
-    write_status(status);
+int64_t TrainingController::current_timestamp_ms() {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
 }
 
-// ============================================================================
-// Checkpoint metadata
-// ============================================================================
+void TrainingController::merge_status_patch(const nlohmann::json& patch) {
+    nlohmann::json current = nlohmann::json::object();
+    atomic_read_json(status_file_, current);
+
+    for (auto it = patch.begin(); it != patch.end(); ++it) {
+        const std::string& key = it.key();
+        if (it.value().is_object() && current.contains(key) && current[key].is_object()) {
+            for (auto nested = it.value().begin(); nested != it.value().end(); ++nested) {
+                current[key][nested.key()] = nested.value();
+            }
+        } else {
+            current[key] = it.value();
+        }
+    }
+    write_status(current);
+}
+
+void TrainingController::update_train_status(const std::string& mode,
+                                             const std::string& state,
+                                             int epoch,
+                                             int total_epochs,
+                                             double loss,
+                                             double best_r2,
+                                             double rmse,
+                                             double mae,
+                                             const std::string& message,
+                                             const std::string& submode) {
+    nlohmann::json patch = {
+        {"mode", mode},
+        {"state", state},
+        {"submode", submode},
+        {"message", message},
+        {"timestamp_ms", current_timestamp_ms()},
+        {"train", {
+            {"epoch", epoch},
+            {"total_epochs", total_epochs},
+            {"loss", loss},
+            {"best_r2", best_r2},
+            {"rmse", rmse},
+            {"mae", mae}
+        }}
+    };
+    merge_status_patch(patch);
+}
+
+void TrainingController::update_predict_status(const std::string& mode,
+                                               const std::string& state,
+                                               const std::string& message,
+                                               const nlohmann::json* eol) {
+    nlohmann::json patch = {
+        {"mode", mode},
+        {"state", state},
+        {"submode", "predict"},
+        {"message", message},
+        {"timestamp_ms", current_timestamp_ms()}
+    };
+    if (eol != nullptr) {
+        patch["predict"] = nlohmann::json{{"eol", *eol}};
+    }
+    merge_status_patch(patch);
+}
+
 void TrainingController::save_checkpoint_meta(const std::string& meta_path,
                                               const nlohmann::json& meta) {
     atomic_write_json(meta_path, meta);
@@ -122,9 +148,6 @@ bool TrainingController::checkpoint_exists(const std::string& meta_path) const {
     return std::filesystem::exists(meta_path);
 }
 
-// ============================================================================
-// Helpers: atomic JSON I/O
-// ============================================================================
 void TrainingController::atomic_write_json(const std::string& path,
                                            const nlohmann::json& j) {
     try {

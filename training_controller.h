@@ -14,7 +14,7 @@ namespace tju_torch {
 // TrainingController
 // Provides file-based IPC for Qt frontend to control training:
 //   - Reads commands from control.json (pause/resume/stop/restart)
-//   - Writes status to status.json (epoch, loss, metrics, state)
+//   - Writes status to status.json (merged by task block: train / predict)
 //   - Saves/loads checkpoint metadata JSON for restart support
 // ============================================================================
 class TrainingController {
@@ -25,35 +25,35 @@ public:
     // ------------------------------------------------------------------------
     // Control file
     // ------------------------------------------------------------------------
-    // Read the latest command from control file. Returns one of:
-    // "run", "pause", "resume", "stop", "restart", or empty string.
     std::string read_command();
-
-    // Acknowledge (clear) the command so it isn't processed again.
     void acknowledge_command();
-
-    // Blocking wait while command is "pause". Polls every poll_interval_ms.
-    // Returns the command that broke the pause (resume/stop/restart).
     std::string wait_for_resume(int poll_interval_ms = 500);
 
     // ------------------------------------------------------------------------
-    // Status file (atomic write: temp -> rename)
+    // Status file (atomic write: temp -> rename, merge with existing)
     // ------------------------------------------------------------------------
     void write_status(const nlohmann::json& status);
 
-    // Convenience: build and write a standard status object
-    void update_status(const std::string& mode,
-                       const std::string& state,
-                       int epoch,
-                       int total_epochs,
-                       double loss,
-                       double best_r2,
-                       double rmse,
-                       double mae,
-                       const std::string& message);
+    // Patch top-level fields + "train" block; leaves "predict" block unchanged.
+    void update_train_status(const std::string& mode,
+                             const std::string& state,
+                             int epoch,
+                             int total_epochs,
+                             double loss,
+                             double best_r2,
+                             double rmse,
+                             double mae,
+                             const std::string& message,
+                             const std::string& submode = "train");
+
+    // Patch top-level fields + "predict" block; leaves "train" block unchanged.
+    void update_predict_status(const std::string& mode,
+                               const std::string& state,
+                               const std::string& message,
+                               const nlohmann::json* eol = nullptr);
 
     // ------------------------------------------------------------------------
-    // Checkpoint metadata (JSON only; managers handle model .pt themselves)
+    // Checkpoint metadata
     // ------------------------------------------------------------------------
     void save_checkpoint_meta(const std::string& meta_path,
                               const nlohmann::json& meta);
@@ -69,6 +69,8 @@ private:
     std::string status_file_;
     std::string last_command_;
 
+    void merge_status_patch(const nlohmann::json& patch);
+    static int64_t current_timestamp_ms();
     void atomic_write_json(const std::string& path,
                            const nlohmann::json& j);
     bool atomic_read_json(const std::string& path,

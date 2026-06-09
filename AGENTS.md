@@ -4,7 +4,7 @@
 
 This is an academic research project that ports MATLAB-based deep learning models to C++ using LibTorch (PyTorch C++ API). The project focuses on two main tasks:
 
-1. **Fuel Cell Lifespan Prediction** — Feedforward Neural Network (FFN) regression to predict stack voltage degradation, combined with a Semi-Empirical Dynamic Model (SEDM) for hybrid forecasting.
+1. **Fuel Cell Lifespan Prediction** — Battery lifespan prediction using a Feedforward Neural Network (FFN) for time-series regression, combined with a Semi-Empirical Dynamic Model (SEDM) for hybrid forecasting. Supports both training (`train`) and prediction (`predict`) sub-modes.
 2. **Fault Diagnosis** — Sequence classification using 1D CNN and Temporal Convolutional Networks (TCN) on multi-channel time-series data.
 
 The project name is `tju-torch` (CMake project name). It was created by `siqi` and targets C++17.
@@ -52,8 +52,8 @@ The project name is `tju-torch` (CMake project name). It was created by `siqi` a
 │
 ├── unified_main.cpp            # Unified executable entry point
 ├── common_ffn.h                # Shared FFN, normalizers, metrics
-├── ffn_manager.h/.cpp          # FFN training manager class
-├── sedm_manager.h/.cpp         # SEDM hybrid prediction manager class
+├── data_reader.h               # Unified txt/csv data file reader (header skip, row range)
+├── sedm_manager.h/.cpp         # Battery lifespan manager (train + predict submodes)
 ├── faultdiag_manager.h/.cpp    # Fault diagnosis manager class
 ├── training_controller.h/.cpp  # Qt IPC control/status module
 │
@@ -119,7 +119,7 @@ A single unified executable is produced (legacy executables are preserved in sou
 
 | Executable | Source Files | Purpose |
 |------------|--------------|---------|
-| `tju-torch` | `unified_main.cpp`, `ffn_manager.cpp`, `sedm_manager.cpp`, `faultdiag_manager.cpp`, `faultDiagnosis.cpp`, `training_controller.cpp` | Unified entry point dispatching to FFN, SEDM, or fault diagnosis via JSON `mode` |
+| `tju-torch` | `unified_main.cpp`, `sedm_manager.cpp`, `faultdiag_manager.cpp`, `faultDiagnosis.cpp`, `training_controller.cpp` | Unified entry point dispatching via CLI `--mode` / `--submode` |
 
 **Legacy sources** (`prediction_model_FFN.cpp`, `predictionSEDM.cpp`, `faultDiagMain.cpp`) are kept in the repository for reference but removed from the CMake build target.
 
@@ -127,34 +127,42 @@ A single unified executable is produced (legacy executables are preserved in sou
 
 ## Runtime Architecture
 
-The unified executable `tju-torch.exe` reads a single JSON config file and dispatches to the appropriate manager class based on the top-level `mode` field.
+The unified executable `tju-torch.exe` loads `./unified_config.json` from the **current working directory** (GUI sets cwd to the case root). The run task is selected via **command-line** `mode` / `submode`; JSON retains persistent parameters only.
 
 ```powershell
-.\tju-torch.exe [config_file.json]
+cd /path/to/case
+.\tju-torch.exe --mode battery_lifespan --submode train
+.\tju-torch.exe --mode battery_lifespan --submode predict
+.\tju-torch.exe --mode faultdiag
+.\tju-torch.exe --mode battery_lifespan --submode train --config unified_config.json
 ```
 
-If no config file is provided, defaults to `unified_config.json`.
+| CLI flag | Values | Notes |
+|----------|--------|-------|
+| `--mode` / `-m` | `battery_lifespan`, `faultdiag` | CLI only; default `battery_lifespan` |
+| `--submode` / `-s` | `train`, `predict` | CLI only (lifespan); default `train` |
+| `--config` / `-c` | path | Default `./unified_config.json` relative to cwd |
 
-### 1. FFN Mode (`"mode": "ffn"`)
+JSON does **not** contain root `mode` or `battery_lifespan.submode`. Omitted CLI flags use defaults `battery_lifespan` / `train`.
 
-Managed by `FFNManager` (`ffn_manager.cpp`).
-- **Input**: Plain-text data file (path from JSON `input_data_path`)
-- **Preprocessing**: Sliding window with configurable `window_size`, pluggable normalization
-- **Model**: Generalized FFN with configurable hidden layer count and neuron counts
-- **Optimizers Supported**: LBFGS, Adam, AdamW, RMSprop
-- **Outputs**: Model `.pt`, `predictions.csv`, `training_log.csv`, `status.json`
-- **Metrics**: R², RMSE, MAE
-- **Control**: Supports pause/resume/stop/restart via `control.json`
+### 1. Battery Lifespan Mode (`--mode battery_lifespan`)
 
-### 2. SEDM Mode (`"mode": "sedm"`)
-
-Managed by `SEDMManager` (`sedm_manager.cpp`).
-- Loads pre-trained model (path from JSON `model_path`) or trains fallback
-- Runs DDM neural network alongside physics-based SEDM
-- Combines predictions: `V_hybrid = (RR * V_SEM + V_DDM) / (RR + 1)`
-- **Outputs**: `hybrid_predictions.csv`, `status.json`
-- **Metrics**: R², RMSE, MAE for SEM / DDM / Hybrid
-- **Control**: Supports pause/resume/stop/restart via `control.json`
+Managed by `BatteryLifespanManager` (`sedm_manager.cpp`).
+- **Submode `train`**:
+  - Trains a DDM neural network on plain-text or CSV time-series data (via `data_reader.h`).
+  - Supports **AdamW** and **LBFGS** optimizers.
+  - LBFGS includes automatic seed-retry (seeds 42–51) to handle divergence.
+  - Iterative outer loop validates best R² on test data (compatible with old FFN training style).
+  - **Outputs**: Model `.pt`, `battery_predictions.csv` (`Time,YTest,YPred,Error`), `battery_training_log.csv`, `status.json`
+  - **Metrics**: R², RMSE, MAE
+- **Submode `predict`**:
+  - Loads a pre-trained model (path from JSON `model_path`).
+  - Runs DDM neural network alongside physics-based SEDM.
+  - Combines predictions: `V_hybrid = (RR * V_SEM + V_DDM) / (RR + 1)`.
+  - Computes **battery end-of-life (EOL)**: first time point on the full hybrid curve where `V_Hybrid <= eol_threshold_ratio * V_max` (default 80%).
+  - **Outputs**: `battery_predictions.csv` (`Time,YTest,V_SEM,V_DDM,V_Hybrid,Error_SEM,Error_DDM,Error_Hybrid`), `status.json`
+  - **Metrics**: EOL estimate only (R²/RMSE/MAE are printed during `train` validation, not in `predict`)
+- **Control**: Supports pause/resume/stop/restart via `control.json` for both submodes.
 
 ### 3. FaultDiag Mode (`"mode": "faultdiag"`)
 
@@ -170,42 +178,17 @@ Managed by `FaultDiagManager` (`faultdiag_manager.cpp`).
 
 ## Configuration System
 
-The unified executable uses a single JSON configuration file. The top-level `mode` field selects the task. All file paths **must be explicitly provided** in the JSON — there are no hard-coded defaults.
+The unified executable uses `./unified_config.json` in the current working directory. **Run intent** (`mode`, lifespan `submode`) comes from the command line; JSON holds data paths, hyperparameters, and physics settings. All file paths **must be explicitly provided** in the JSON — there are no hard-coded defaults for paths.
 
 ### Unified Config Schema (`unified_config.json`)
 
 ```json
 {
-  "mode": "ffn",
-  "ffn": {
+  "battery_lifespan": {
     "input_data_path": "Data_V13_40kW.txt",
-    "output_model_path": "ffn_best_model.pt",
-    "output_predictions_path": "predictions.csv",
-    "output_training_log_path": "training_log.csv",
-    "control_file_path": "control.json",
-    "status_file_path": "status.json",
-    "hidden_layers": 2,
-    "hidden_layer_neurons": [50, 50],
-    "learning_rate": 0.001,
-    "epochs": 15000,
-    "batch_size": 32,
-    "optimizer_type": "adamw",
-    "optimizer": { "adamw": { "learning_rate": 0.001, "beta1": 0.9, "beta2": 0.999, "eps": 1e-10, "weight_decay": 0.001 } },
-    "normalization": { "enabled": true, "method": "minmax_neg1_1" },
-    "goal_loss": 2e-5,
-    "max_iterations": 1000,
-    "target_r2": 0.85,
-    "print_interval": 200,
-    "window_size": 5,
-    "train_samples": 300,
-    "num_rows": 900,
-    "input_columns": [4, 5, 8, 10],
-    "output_column": 11
-  },
-  "sedm": {
-    "input_data_path": "Data_V13_40kW.txt",
-    "model_path": "sedm_best_model.pt",
-    "output_predictions_path": "hybrid_predictions.csv",
+    "model_path": "battery_best_model.pt",
+    "output_predictions_path": "battery_predictions.csv",
+    "output_training_log_path": "battery_training_log.csv",
     "control_file_path": "control.json",
     "status_file_path": "status.json",
     "hidden_layers": 2,
@@ -213,17 +196,47 @@ The unified executable uses a single JSON configuration file. The top-level `mod
     "learning_rate": 1.0,
     "epochs": 1000,
     "batch_size": 32,
-    "optimizer_type": "lbfgs",
-    "optimizer": { "lbfgs": { "learning_rate": 1.0, "max_iter": 20, "max_eval": 25, "tolerance_grad": 1e-7, "tolerance_change": 1e-9, "history_size": 100 } },
+    "optimizer_type": "adamw",
+    "optimizer": {
+      "lbfgs": { "learning_rate": 1.0, "max_iter": 20, "max_eval": 25, "tolerance_grad": 1e-7, "tolerance_change": 1e-9, "history_size": 100 },
+      "adamw": { "learning_rate": 0.001, "beta1": 0.9, "beta2": 0.999, "eps": 1e-8, "weight_decay": 0.001 }
+    },
     "normalization": { "enabled": true, "method": "minmax_neg1_1" },
     "goal_loss": 1e-10,
+    "max_iterations": 1000,
+    "target_r2": 0.85,
+    "print_interval": 200,
     "window_size": 5,
-    "train_samples": 300,
-    "num_rows": 900,
+    "training_sample_ratio": 0.5,
+    "num_rows_begin": 1,
+    "num_rows_end": 900,
+    "time_begin": 0.0,
+    "eol_threshold_ratio": 0.80,
     "rr": 4.0,
     "input_columns": [4, 5, 8, 10],
     "output_column": 11,
-    "time_column": 0
+    "time_column": 0,
+    "nn": 300,
+    "A_cell": 0.019,
+    "t_MEM": 0.000015,
+    "t_CLc": 0.000015,
+    "t_MPLc": 0.00003,
+    "t_GDLc": 0.00018,
+    "t_CHc": 0.00044,
+    "POR_CLc": 0.455,
+    "POR_MPLc": 0.4,
+    "POR_GDLc": 0.6,
+    "Alpha_a": 0.8,
+    "Alpha_c": 0.2,
+    "j_ref_a": 10.0,
+    "j_ref_c": 0.00001,
+    "K_c_ini": 100.0,
+    "b_leak": 0.001,
+    "b_ECSA": -0.0002,
+    "b_ion": 0.0002,
+    "b_R": 1e-8,
+    "b_D": 0.1,
+    "b_B": 0.00001
   },
   "faultdiag": {
     "submode": "tcn",
@@ -268,27 +281,53 @@ For fault diagnosis, `rescale_symmetric` is an alias for `minmax_neg1_1`.
 
 #### Column Selection (txt/csv modes)
 
-For `ffn` and `sedm` modes, the input features and output target are selected by column index (0-based) instead of hard-coded positions:
+For `battery_lifespan` mode, input data files may be **whitespace-delimited txt** or **comma-separated csv** (auto-detected; first non-numeric line treated as header and skipped). Reading is implemented in `data_reader.h` and used via `common_ffn.h`.
+
+For `battery_lifespan` mode, the input features and output target are selected by column index (0-based) instead of hard-coded positions:
 
 | Field | Type | Mode | Description |
 |-------|------|------|-------------|
-| `input_columns` | `int[]` | `ffn`, `sedm` | 0-based column indices to use as neural-network input features |
-| `output_column` | `int` | `ffn`, `sedm` | 0-based column index to use as the prediction target |
-| `time_column` | `int` | `sedm` | 0-based column index for the time variable used by the SEDM physics model |
+| `input_columns` | `int[]` | `battery_lifespan` | 0-based column indices to use as neural-network input features |
+| `output_column` | `int` | `battery_lifespan` | 0-based column index to use as the prediction target |
+| `time_column` | `int` | `battery_lifespan` | 0-based column index for the time variable used by the SEDM physics model |
+
+| `num_rows_begin` | `int` | `battery_lifespan` | First numeric data row to read, **1-based inclusive** (matches GUI row numbers; header lines are not counted). Values `<= 0` are treated as `1`. |
+| `num_rows_end` | `int` | `battery_lifespan` | Last numeric data row to read, **1-based inclusive**. Use `-1` or `<= 0` to read through the last data row. |
+| `time_begin` | `double` | `battery_lifespan` | Starting time offset (in hours) written by the GUI. When calculating EOL, this value is subtracted from the absolute time to obtain the real lifetime. Default is `0.0`. |
+| `eol_threshold_ratio` | `double` | `battery_lifespan` | Ratio of maximum predicted hybrid voltage used as the EOL threshold. `V_max` is taken from the full prediction curve; EOL is the **first** time point where `V_Hybrid <= eol_threshold_ratio * V_max`. Default is `0.80`.
+
+> **Backward compatibility**: The legacy `num_rows` field is still supported. If `num_rows_begin`/`num_rows_end` are not present but `num_rows` is, the behavior defaults to `num_rows_begin=1` and `num_rows_end=num_rows` (first `num_rows` data rows). A legacy `num_rows_begin` of `0` is treated as `1`.
 
 If these fields are omitted, the defaults match the original hard-coded behavior:
 - `input_columns`: `[4, 5, 8, 10]`
 - `output_column`: `11`
 - `time_column`: `0`
 
-> **SEDM note**: The SEDM physics model expects `input_columns` to contain at least 4 columns mapping to `[Pc, Pa, T, I]` in that order.
+> **SEDM note**: The SEDM physics model (used in `predict` submode) expects `input_columns` to contain at least 4 columns mapping to `[Pc, Pa, T, I]` in that order.
+
+#### SEDM Input Parameters (flat keys under `battery_lifespan`)
+
+Optional fields at the same level as `input_data_path`, `rr`, etc.; omitted keys use `sedmInputParameter` defaults in `sedm_manager.h`.
+
+| Field | Default | Category | Description |
+|-------|---------|----------|-------------|
+| `nn` | `300` | Stack geometry | Number of cells; stack voltage = cell voltage × `nn` |
+| `A_cell` | `0.019` | Stack geometry | Active area (m²) |
+| `t_MEM`, `t_CLc`, `t_MPLc`, `t_GDLc`, `t_CHc` | see config | Stack geometry | Layer thicknesses (m); `t_GDLc` used in limit-current term |
+| `POR_CLc`, `POR_MPLc`, `POR_GDLc` | see config | Stack geometry | Porosities; `POR_GDLc` used in diffusion terms |
+| `Alpha_a`, `Alpha_c` | `0.8`, `0.2` | Initialization | Charge-transfer coefficients |
+| `j_ref_a`, `j_ref_c` | `10.0`, `1e-5` | Initialization | Reference exchange current densities |
+| `K_c_ini` | `100.0` | Initialization | Initial concentration-loss scaling |
+| `b_leak`, `b_ECSA`, `b_ion`, `b_R`, `b_D`, `b_B` | see config | Degradation | Time-dependent degradation factors |
+
+Constants fixed in code (not in JSON): `F`, `R`, `P0`, `Gamma_a/c`, `c_o2_ref`, `L_Pt`, and derived `i_leak_ini` (= `20 * A_cell`), `A_ECSA_ini`, `R_ion_ini`, `R_ele_ini`.
 
 #### Required File Path Fields (per mode)
 
 | Mode | Required Path Fields |
 |------|---------------------|
-| `ffn` | `input_data_path`, `output_model_path`, `output_predictions_path`, `output_training_log_path`, `control_file_path`, `status_file_path` |
-| `sedm` | `input_data_path`, `model_path`, `output_predictions_path`, `control_file_path`, `status_file_path` |
+| `battery_lifespan` (train) | `input_data_path`, `model_path`, `output_predictions_path`, `output_training_log_path`, `control_file_path`, `status_file_path` |
+| `battery_lifespan` (predict) | `input_data_path`, `model_path`, `output_predictions_path`, `control_file_path`, `status_file_path` |
 | `faultdiag` | `input_mat_path`, `output_model_path`, `control_file_path`, `status_file_path` |
 
 ---
@@ -317,7 +356,7 @@ The core ML library lives in the `lifespanPred` namespace.
 Self-contained single-file executable. Defines:
 - `FeedForwardNet` (3-layer, sigmoid hidden)
 - `MinMaxScaler` (column-wise normalization)
-- `readDataFile()` (whitespace-delimited text parser)
+- Legacy local `readDataFile()` (whitespace txt only; **not** used by unified `tju-torch` build)
 - Training loop with optimizer dispatch
 
 ### `predictionSEDM.cpp`
@@ -365,14 +404,14 @@ There is **no automated unit test framework** (no GoogleTest, Catch2, etc.). Tes
 1. **Smoke Test**: Run `faultDiag.exe faultDiag_config_test.json` to train CNN and TCN on synthetic random sequences.
 2. **MATLAB Comparison**: Train CNN/TCN in C++ and compare confusion matrices and accuracies with MATLAB outputs.
 3. **R² Validation**: FFN training stops only when R² exceeds a threshold; manual inspection of `predictions.csv` is required.
-4. **Python Post-Processing**: Run `post_process.py` after `SEDM.exe` to verify hybrid model metrics and generate plots.
+4. **Python Post-Processing**: Run `post_process.py` after `battery_lifespan predict` to verify hybrid model metrics and generate plots.
 
 ### Validation Checklist
 
 - [ ] `faultDiag` CNN mode runs without normalization messages.
 - [ ] `faultDiag` TCN mode prints "Input normalization: ENABLED".
-- [ ] `FFNPredictor` produces `predictions.csv` with RMSE and R² > target.
-- [ ] `SEDM` produces `hybrid_predictions.csv` and Python plots.
+- [ ] `battery_lifespan train` produces `predictions.csv` with RMSE and R² > target.
+- [ ] `battery_lifespan predict` produces `hybrid_predictions.csv` and Python plots.
 - [ ] Confusion matrices from C++ match MATLAB reference values.
 
 ---
@@ -423,7 +462,7 @@ The unified executable `tju-torch.exe` is designed to be controlled by a Qt desk
 // 1. Start the process
 QProcess *process = new QProcess(parent);
 process->setProgram("tju-torch.exe");
-process->setArguments({"unified_config.json"});  // or any config file
+process->setArguments({"--mode", "battery_lifespan", "--submode", "train", "--config", "unified_config.json"});
 process->start();
 
 // 2. Poll status.json periodically (e.g., every 500 ms)
@@ -436,17 +475,28 @@ connect(timer, &QTimer::timeout, [=]() {
 
     QJsonDocument doc = QJsonDocument::fromJson(data);
     QJsonObject status = doc.object();
-
-    int epoch = status["epoch"].toInt();
-    int total = status["total_epochs"].toInt();
-    QString state = status["state"].toString();  // "running", "paused", "stopped", "completed"
-    double loss = status["loss"].toDouble();
-    double r2   = status["best_r2"].toDouble();
-    double rmse = status["rmse"].toDouble();
-    double mae  = status["mae"].toDouble();
+    QString submode = status["submode"].toString();  // "train" | "predict"
+    QString state = status["state"].toString();
     QString msg = status["message"].toString();
 
-    // Update UI progress bars, labels, etc.
+    if (submode == "train" && status.contains("train")) {
+        QJsonObject train = status["train"].toObject();
+        int epoch = train["epoch"].toInt();
+        int total = train["total_epochs"].toInt();
+        double r2 = train["best_r2"].toDouble();
+        // Update training progress UI...
+    }
+    if (status.contains("predict")) {
+        QJsonObject predict = status["predict"].toObject();
+        if (predict.contains("eol")) {
+            QJsonObject eol = predict["eol"].toObject();
+            if (eol["detected"].toBool()) {
+                double x = eol["x"].toDouble();
+                double y = eol["y"].toDouble();
+                // Mark EOL point on chart...
+            }
+        }
+    }
 });
 timer->start(500);
 ```
@@ -488,33 +538,61 @@ void MainWindow::onPauseClicked() {
 
 The executable writes its current state after every epoch (and immediately upon state changes). Qt should read this file periodically.
 
+Status updates **merge** into the existing file by task block: `train` and `predict` are updated independently so one run does not wipe the other.
+
 ```json
 {
-  "mode": "ffn",
-  "state": "running",
-  "epoch": 150,
-  "total_epochs": 1000,
-  "loss": 0.00123,
-  "best_r2": 0.92,
-  "rmse": 0.045,
-  "mae": 0.032,
-  "message": "Training iteration 2, epoch 150",
+  "mode": "battery_lifespan",
+  "state": "completed",
+  "submode": "predict",
+  "message": "EOL at time=512.5h (...)",
+  "train": {
+    "epoch": 60,
+    "total_epochs": 60,
+    "loss": 0.0,
+    "best_r2": 0.92,
+    "rmse": 0.04,
+    "mae": 0.03
+  },
+  "predict": {
+    "eol": {
+      "detected": true,
+      "x": 512.5,
+      "y": 155.2
+    }
+  },
   "timestamp_ms": 1715432101000
 }
 ```
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `mode` | string | `"ffn"`, `"sedm"`, or `"faultdiag"` |
+| `mode` | string | `"battery_lifespan"` or `"faultdiag"` |
 | `state` | string | `"idle"`, `"running"`, `"paused"`, `"stopped"`, `"completed"` |
-| `epoch` | int | Current epoch number |
+| `submode` | string | Last active task: `"train"` or `"predict"` (`battery_lifespan` only) |
+| `message` | string | Human-readable status for the current update |
+| `train` | object | Training metrics; updated only by **train** / **faultdiag** runs |
+| `predict` | object | Prediction results; updated only when **predict** completes (with `eol`) |
+| `timestamp_ms` | int64 | Monotonic timestamp for freshness check |
+
+#### `train` object
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `epoch` | int | Current epoch |
 | `total_epochs` | int | Total epochs configured |
 | `loss` | double | Current training loss |
-| `best_r2` | double | Best R² achieved so far (FFN/SEDM) |
-| `rmse` | double | Current RMSE |
-| `mae` | double | Current MAE |
-| `message` | string | Human-readable status message |
-| `timestamp_ms` | int64 | Monotonic timestamp for freshness check |
+| `best_r2` | double | Best R² (`battery_lifespan` train) |
+| `rmse` | double | RMSE |
+| `mae` | double | MAE |
+
+#### `predict.eol` object (`battery_lifespan` predict only)
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `detected` | bool | `true` if EOL crossing was found on the hybrid curve |
+| `x` | double \| null | Abscissa: time (hours), same as CSV `Time` |
+| `y` | double \| null | Ordinate: `V_Hybrid` at the crossing |
 
 ### Checkpoint System
 
@@ -547,9 +625,8 @@ All IPC file paths are **configurable via JSON** (`control_file_path`, `status_f
 ## File Reference for Agents
 
 - **To modify model architecture**: Edit `faultDiagnosis.h` (declarations) and `faultDiagnosis.cpp` (implementations).
-- **To modify FFN training**: Edit `ffn_manager.h` and `ffn_manager.cpp`.
-- **To modify hybrid prediction**: Edit `sedm_manager.h` and `sedm_manager.cpp`.
+- **To modify battery lifespan training / prediction**: Edit `sedm_manager.h` and `sedm_manager.cpp`.
 - **To modify fault diagnosis CLI**: Edit `faultdiag_manager.h` and `faultdiag_manager.cpp`.
 - **To modify Qt IPC behavior**: Edit `training_controller.h` and `training_controller.cpp`.
-- **To add a new optimizer**: Update the `SequenceTrainer` constructor in `faultDiagnosis.h` and the optimizer dispatch in `ffn_manager.cpp` / `sedm_manager.cpp`.
-- **To change data preprocessing**: Update `common_ffn.h` (`DataNormalizer` hierarchy) or `SequenceNormalizer` in `faultDiagnosis.h` / `faultDiagnosis.cpp`.
+- **To add a new optimizer**: Update the `SequenceTrainer` constructor in `faultDiagnosis.h` and the optimizer dispatch in `sedm_manager.cpp`.
+- **To change data preprocessing**: Update `data_reader.h` / `common_ffn.h` (`DataNormalizer`, `readDataFile`) for battery lifespan txt/csv input, or `SequenceNormalizer` in `faultDiagnosis.h` / `faultDiagnosis.cpp` for fault diagnosis.
